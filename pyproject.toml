@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dstretch-python"
+version = "0.1.0"
+description = "Python implementation of DStretch decorrelation stretch for rock art analysis"
+authors = [{name = "Your Name", email = "your.email@example.com"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy>=1.21.0",
+    "scipy>=1.7.0",
+    "opencv-python>=4.5.0",
+    "pillow>=8.3.0",
+    "matplotlib>=3.7.5",
+    "scikit-image>=0.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov",
+    "black",
+    "flake8",
+]
+
+[project.scripts]
+dstretch = "dstretch.cli:main"
+dstretch-gui = "dstretch.gui:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/dstretch-python"
+Repository = "https://github.com/yourusername/dstretch-python.git"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dstretch"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/examples",
+    "/README.md",
+]
