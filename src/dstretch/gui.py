@@ -13,7 +13,7 @@ from pathlib import Path
 import threading
 from typing import Optional
 
-from . import DecorrelationStretch, get_available_colorspaces
+from . import DecorrelationStretch, list_available_colorspaces as get_available_colorspaces
 
 
 class DStretchGUI:
@@ -162,7 +162,7 @@ class DStretchGUI:
         available_colorspaces = get_available_colorspaces()
         
         # Organize colorspaces in rows (4 buttons per row to match DStretch layout)
-        colorspace_names = list(available_colorspaces.keys())
+        colorspace_names = available_colorspaces
         rows = []
         for i in range(0, len(colorspace_names), 4):
             rows.append(colorspace_names[i:i+4])
