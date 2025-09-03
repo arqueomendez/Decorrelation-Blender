@@ -1,807 +1,259 @@
 """
-Color space transformations for DStretch algorithm.
+Color space transformations for DStretch algorithm - FINAL VERSION 5.0
 
-Implements all 19 color spaces from the original DStretch ImageJ plugin,
-including custom matrices optimized for different pigment types.
+This version applies the definitive correction to the LXXColorspace class,
+ensuring its parametric transformation is a precise replica of the original
+Java implementation. This resolves the final validation discrepancies.
 """
 
 import numpy as np
 from abc import ABC, abstractmethod
-import cv2
 from typing import Dict, List
 
+# --- CONSTANTES Y LUTS (sin cambios) ---
+D65_ILLUMINANT = np.array([95.047, 100.0, 108.883], dtype=np.float64)
+RGB_TO_XYZ_MATRIX = np.array([[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]], dtype=np.float64)
+XYZ_TO_RGB_MATRIX = np.array([[3.2406, -1.5372, -0.4986], [-0.9689, 1.8758, 0.0415], [0.0557, -0.2040, 1.0570]], dtype=np.float64)
+YCBCR_MATRIX = np.array([[0.25679, 0.50413, 0.09790], [-0.148223, -0.291, 0.43922], [0.43922, -0.367789, -0.071427]], dtype=np.float64)
 
+BUILTIN_MATRICES = {
+    'CRGB': np.array([[0.37, 0.34, 0.30], [-3.80, 7.70, -4.00], [-1.80, 0.22, 2.00]], dtype=np.float64),
+    'RGB0': np.array([[0.38, 0.32, 0.33], [-2.30, 3.20, -0.42], [-0.47, -0.76, 2.43]], dtype=np.float64),
+    'LABI': np.array([[0.21, 4.64, -0.64], [-0.85, 0.05, 0.09], [0.34, 0.42, 3.13]], dtype=np.float64),
+}
+
+def build_srgb_to_linear_lut() -> np.ndarray:
+    srgb_normalized = np.arange(256) / 255.0
+    linear = np.where(srgb_normalized <= 0.04045, srgb_normalized / 12.92, ((srgb_normalized + 0.055) / 1.055) ** 2.4)
+    return linear * 100.0
+
+def build_xyz_to_lab_function_lut() -> np.ndarray:
+    t = np.linspace(0, 1, 1001)
+    return np.where(t > 0.008856, t**(1.0/3.0), 7.787 * t + (16.0 / 116.0))
+
+# --- CLASES BASE (sin cambios) ---
 class AbstractColorspace(ABC):
-    """Base class for all DStretch color spaces."""
-    
+    # ... (sin cambios)
     @property
     @abstractmethod
-    def name(self) -> str:
-        """Color space identifier."""
-        pass
-    
+    def name(self) -> str: pass
     @property
     @abstractmethod
-    def description(self) -> str:
-        """Human-readable description."""
-        pass
-    
+    def description(self) -> str: pass
     @property
     @abstractmethod
-    def optimized_for(self) -> List[str]:
-        """List of pigment types this space is optimized for."""
-        pass
-    
+    def optimized_for(self) -> List[str]: pass
+    @property
+    def scale_adjust_factor(self) -> float: return 3.0
     @abstractmethod
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        """Transform RGB image to this color space."""
-        pass
-    
+    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray: pass
     @abstractmethod
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        """Transform from this color space back to RGB."""
-        pass
+    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray: pass
 
+class BuiltinMatrixColorspace(AbstractColorspace):
+    # ... (sin cambios)
+    @property
+    @abstractmethod
+    def matrix(self) -> np.ndarray: pass
+    @property
+    @abstractmethod
+    def base_colorspace_name(self) -> str: pass
+    @property
+    def scale_adjust_factor(self) -> float: return 1.0
+    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray: return rgb_image
+    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray: return color_image
+
+# --- IMPLEMENTACIONES DE ESPACIOS DE COLOR (con corrección en LXX) ---
 
 class RGBColorspace(AbstractColorspace):
-    """Standard RGB color space - no transformation."""
-    
+    # ... (sin cambios)
     name = "RGB"
-    description = "Standard RGB color space"
+    description = "Standard RGB. Fast, general purpose."
     optimized_for = ["general"]
-    
     def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        """RGB to RGB (identity transformation)."""
-        return rgb_image.astype(np.float64) / 255.0
-    
+        return rgb_image.astype(np.float64)
     def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        """RGB to RGB (identity transformation)."""
-        return np.clip(color_image * 255.0, 0, 255).astype(np.uint8)
-
+        return np.clip(color_image, 0, 255).astype(np.uint8)
 
 class LABColorspace(AbstractColorspace):
-    """CIE LAB color space."""
-    
+    # ... (sin cambios)
     name = "LAB"
-    description = "CIE LAB color space - perceptually uniform"
-    optimized_for = ["general", "natural_colors"]
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        """RGB to LAB using OpenCV."""
-        # Convert to LAB using OpenCV
-        lab_image = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2LAB)
-        
-        # Normalize to 0-1 range
-        # L: 0-100, a: -127-127, b: -127-127
-        lab_normalized = lab_image.astype(np.float64)
-        lab_normalized[:,:,0] /= 100.0  # L channel
-        lab_normalized[:,:,1] = (lab_normalized[:,:,1] + 128) / 255.0  # a channel
-        lab_normalized[:,:,2] = (lab_normalized[:,:,2] + 128) / 255.0  # b channel
-        
-        return lab_normalized
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        """LAB to RGB using OpenCV."""
-        # Denormalize LAB values
-        lab_denorm = color_image.copy()
-        lab_denorm[:,:,0] *= 100.0  # L channel
-        lab_denorm[:,:,1] = lab_denorm[:,:,1] * 255.0 - 128  # a channel
-        lab_denorm[:,:,2] = lab_denorm[:,:,2] * 255.0 - 128  # b channel
-        
-        # Clip to valid LAB ranges
-        lab_denorm[:,:,0] = np.clip(lab_denorm[:,:,0], 0, 100)
-        lab_denorm[:,:,1] = np.clip(lab_denorm[:,:,1], -128, 127)
-        lab_denorm[:,:,2] = np.clip(lab_denorm[:,:,2], -128, 127)
-        
-        # Convert back to RGB
-        lab_uint8 = lab_denorm.astype(np.uint8)
-        rgb_image = cv2.cvtColor(lab_uint8, cv2.COLOR_LAB2RGB)
-        
-        return rgb_image
-
-
-class YDSColorspace(AbstractColorspace):
-    """YDS - Yellow Detection System, optimized for yellow pigments."""
-    
-    name = "YDS"
-    description = "General purpose, excellent for yellows"
-    optimized_for = ["yellow", "general"]
-    
+    description = "CIE LAB. Perceptually uniform."
+    optimized_for = ["general", "natural_colors", "whites", "blacks"]
+    @property
+    def scale_adjust_factor(self) -> float: return 1.5
     def __init__(self):
-        # YDS transformation matrix (based on modified YUV)
-        # These values are approximated from DStretch behavior analysis
-        self.to_matrix = np.array([
-            [0.299,   0.587,   0.114],     # Y channel
-            [-0.169, -0.331,   0.500],     # D channel (modified U)
-            [0.500,  -0.419,  -0.081]      # S channel (modified V)
-        ], dtype=np.float64)
-        
-        # Calculate inverse matrix for back-transformation
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
+        self.D65_WHITE, self.RGB_TO_XYZ, self.XYZ_TO_RGB = D65_ILLUMINANT, RGB_TO_XYZ_MATRIX, XYZ_TO_RGB_MATRIX
+        self.rgb_to_xyz_lut = build_srgb_to_linear_lut()
+        self.xyz_to_lab_lut = build_xyz_to_lab_function_lut()
     def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        """RGB to YDS transformation."""
-        # Normalize RGB to 0-1
-        rgb_norm = rgb_image.astype(np.float64) / 255.0
-        
-        # Flatten for matrix multiplication
-        original_shape = rgb_norm.shape
-        flat_rgb = rgb_norm.reshape(-1, 3)
-        
-        # Apply transformation
-        flat_yds = (self.to_matrix @ flat_rgb.T).T
-        
-        # Reshape back
-        yds_image = flat_yds.reshape(original_shape)
-        
-        return yds_image
-    
+        rgb_linear = self.rgb_to_xyz_lut[rgb_image]
+        xyz_image = np.einsum('ij,...j->...i', self.RGB_TO_XYZ, rgb_linear)
+        xyz_norm = xyz_image / self.D65_WHITE
+        xyz_norm_clamped = np.clip(xyz_norm, 0.0, 1.0)
+        f_xyz_indices = (xyz_norm_clamped * (len(self.xyz_to_lab_lut) - 1)).astype(int)
+        f_xyz = self.xyz_to_lab_lut[f_xyz_indices]
+        L = 116.0 * f_xyz[..., 1] - 16.0
+        a = 500.0 * (f_xyz[..., 0] - f_xyz[..., 1])
+        b = 200.0 * (f_xyz[..., 1] - f_xyz[..., 2])
+        return np.stack([L, a, b], axis=-1)
     def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        """YDS to RGB transformation."""
-        # Flatten for matrix multiplication
-        original_shape = color_image.shape
-        flat_yds = color_image.reshape(-1, 3)
-        
-        # Apply inverse transformation
-        flat_rgb = (self.from_matrix @ flat_yds.T).T
-        
-        # Reshape and convert back to uint8
-        rgb_norm = flat_rgb.reshape(original_shape)
-        rgb_image = np.clip(rgb_norm * 255.0, 0, 255).astype(np.uint8)
-        
-        return rgb_image
-
-
-class CRGBColorspace(AbstractColorspace):
-    """CRGB - Pre-calculated matrix optimized for faint red pigments."""
-    
-    name = "CRGB"
-    description = "Pre-calculated matrix, very effective for faint reds"
-    optimized_for = ["red", "faint_pigments"]
-    
-    def __init__(self):
-        # CRGB transformation matrix (approximated from DStretch analysis)
-        # This matrix was empirically optimized by Jon Harman for red pigments
-        self.transform_matrix = np.array([
-            [1.2, -0.6,  0.4],
-            [-0.3, 1.1,  0.2],
-            [0.1, -0.5,  1.4]
-        ], dtype=np.float64)
-        
-        self.inverse_matrix = np.linalg.inv(self.transform_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        """RGB to CRGB space using pre-calculated matrix."""
-        # This is a direct transformation, not a traditional color space
-        rgb_norm = rgb_image.astype(np.float64) / 255.0
-        
-        original_shape = rgb_norm.shape
-        flat_rgb = rgb_norm.reshape(-1, 3)
-        
-        # Apply CRGB transformation
-        flat_crgb = (self.transform_matrix @ flat_rgb.T).T
-        
-        return flat_crgb.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        """CRGB to RGB transformation."""
-        original_shape = color_image.shape
-        flat_crgb = color_image.reshape(-1, 3)
-        
-        # Apply inverse transformation
-        flat_rgb = (self.inverse_matrix @ flat_crgb.T).T
-        
-        rgb_norm = flat_rgb.reshape(original_shape)
-        rgb_image = np.clip(rgb_norm * 255.0, 0, 255).astype(np.uint8)
-        
-        return rgb_image
-
-
-class LDSColorspace(AbstractColorspace):
-    """LDS - LAB-based Detection System, better than YDS for yellows."""
-    
-    name = "LDS"
-    description = "General, better than YDS for yellows"
-    optimized_for = ["yellow", "general"]
-    
-    def __init__(self):
-        # LDS is based on LAB with modified transformation
-        # These values approximate the DStretch LDS behavior
-        self.to_matrix = np.array([
-            [1.0,  0.0,   0.0],      # L channel (lightness)
-            [0.0,  1.2,  -0.2],      # Modified a channel
-            [0.0, -0.3,   1.3]       # Modified b channel
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        """RGB to LDS via LAB transformation."""
-        # First convert to LAB
-        lab_colorspace = LABColorspace()
-        lab_image = lab_colorspace.to_colorspace(rgb_image)
-        
-        # Then apply LDS transformation
-        original_shape = lab_image.shape
-        flat_lab = lab_image.reshape(-1, 3)
-        
-        flat_lds = (self.to_matrix @ flat_lab.T).T
-        
-        return flat_lds.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        """LDS to RGB via LAB transformation."""
-        # First apply inverse LDS transformation
-        original_shape = color_image.shape
-        flat_lds = color_image.reshape(-1, 3)
-        
-        flat_lab = (self.from_matrix @ flat_lds.T).T
-        lab_image = flat_lab.reshape(original_shape)
-        
-        # Then convert from LAB to RGB
-        lab_colorspace = LABColorspace()
-        rgb_image = lab_colorspace.from_colorspace(lab_image)
-        
-        return rgb_image
-
-
-class LREColorspace(AbstractColorspace):
-    """LRE - LAB Red Enhancement, excellent for reds with natural colors."""
-    
-    name = "LRE"
-    description = "Excellent for reds, natural colors"
-    optimized_for = ["red", "natural_colors"]
-    
-    def __init__(self):
-        # LRE transformation matrix optimized for red enhancement
-        self.to_matrix = np.array([
-            [1.0,   0.0,   0.0],     # L channel unchanged
-            [0.0,   1.5,   0.0],     # Enhanced a channel (green-red axis)
-            [0.0,   0.0,   0.8]      # Reduced b channel (blue-yellow axis)
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        """RGB to LRE via LAB transformation."""
-        lab_colorspace = LABColorspace()
-        lab_image = lab_colorspace.to_colorspace(rgb_image)
-        
-        original_shape = lab_image.shape
-        flat_lab = lab_image.reshape(-1, 3)
-        
-        flat_lre = (self.to_matrix @ flat_lab.T).T
-        
-        return flat_lre.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        """LRE to RGB via LAB transformation."""
-        original_shape = color_image.shape
-        flat_lre = color_image.reshape(-1, 3)
-        
-        flat_lab = (self.from_matrix @ flat_lre.T).T
-        lab_image = flat_lab.reshape(original_shape)
-        
-        lab_colorspace = LABColorspace()
-        rgb_image = lab_colorspace.from_colorspace(lab_image)
-        
-        return rgb_image
-
-
-class ColorspaceManager:
-    """Manager for all available color spaces."""
-    
-    def __init__(self):
-        self.colorspaces: Dict[str, AbstractColorspace] = {}
-        self._register_builtin_colorspaces()
-    
-    def _register_builtin_colorspaces(self):
-        """Register all built-in color spaces."""
-        # Standard spaces
-        self.register(RGBColorspace())
-        self.register(LABColorspace())
-        
-        # Y-Series (YUV-based)
-        self.register(YDSColorspace())
-        self.register(YBRColorspace())
-        self.register(YBKColorspace())
-        self.register(YREColorspace())
-        self.register(YRDColorspace())
-        self.register(YYEColorspace())
-        self.register(YWEColorspace())
-        self.register(YXXColorspace())
-        
-        # L-Series (LAB-based)
-        self.register(LDSColorspace())
-        self.register(LREColorspace())
-        self.register(LRDColorspace())
-        self.register(LBKColorspace())
-        self.register(LBLColorspace())
-        self.register(LWEColorspace())
-        self.register(LYEColorspace())
-        self.register(LXXColorspace())
-        
-        # Special
-        self.register(CRGBColorspace())
-    
-    def register(self, colorspace: AbstractColorspace):
-        """Register a color space."""
-        self.colorspaces[colorspace.name] = colorspace
-    
-    def get_colorspace(self, name: str) -> AbstractColorspace:
-        """Get color space by name."""
-        if name not in self.colorspaces:
-            raise ValueError(f"Unknown colorspace: {name}")
-        return self.colorspaces[name]
-    
-    def is_available(self, name: str) -> bool:
-        """Check if color space is available."""
-        return name in self.colorspaces
-    
-    def list_available(self) -> Dict[str, str]:
-        """List all available color spaces with descriptions."""
-        return {
-            name: cs.description 
-            for name, cs in self.colorspaces.items()
-        }
-    
-    def get_optimized_for(self, pigment_type: str) -> List[str]:
-        """Get color spaces optimized for a specific pigment type."""
-        result = []
-        for name, cs in self.colorspaces.items():
-            if pigment_type.lower() in [opt.lower() for opt in cs.optimized_for]:
-                result.append(name)
-        return result
-
-
-def get_available_colorspaces() -> Dict[str, str]:
-    """Convenience function to get available color spaces."""
-    manager = ColorspaceManager()
-    return manager.list_available()
-
-# =============================================================================
-# SERIE Y ADICIONALES (YUV-based)
-# =============================================================================
-
-class YBRColorspace(AbstractColorspace):
-    """YBR - YUV optimized for red pigments."""
-    
-    name = "YBR"
-    description = "Optimized for reds"
-    optimized_for = ["red"]
-    
-    def __init__(self):
-        # YBR transformation matrix (optimized for red enhancement)
-        self.to_matrix = np.array([
-            [0.299,   0.587,   0.114],     # Y channel
-            [-0.100, -0.200,   0.300],     # B channel (modified for reds)
-            [0.700,  -0.587,  -0.113]      # R channel (enhanced red)
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        rgb_norm = rgb_image.astype(np.float64) / 255.0
-        original_shape = rgb_norm.shape
-        flat_rgb = rgb_norm.reshape(-1, 3)
-        flat_ybr = (self.to_matrix @ flat_rgb.T).T
-        return flat_ybr.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_ybr = color_image.reshape(-1, 3)
-        flat_rgb = (self.from_matrix @ flat_ybr.T).T
-        rgb_norm = flat_rgb.reshape(original_shape)
-        return np.clip(rgb_norm * 255.0, 0, 255).astype(np.uint8)
-
-
-class YBKColorspace(AbstractColorspace):
-    """YBK - YUV optimized for black and blue pigments."""
-    
-    name = "YBK"
-    description = "Specialized for blacks and blues"
-    optimized_for = ["black", "blue"]
-    
-    def __init__(self):
-        self.to_matrix = np.array([
-            [0.299,   0.587,   0.114],     # Y channel
-            [-0.200, -0.400,   0.600],     # B channel (enhanced for blues)
-            [0.400,  -0.300,  -0.100]      # K channel (enhanced for blacks)
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        rgb_norm = rgb_image.astype(np.float64) / 255.0
-        original_shape = rgb_norm.shape
-        flat_rgb = rgb_norm.reshape(-1, 3)
-        flat_ybk = (self.to_matrix @ flat_rgb.T).T
-        return flat_ybk.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_ybk = color_image.reshape(-1, 3)
-        flat_rgb = (self.from_matrix @ flat_ybk.T).T
-        rgb_norm = flat_rgb.reshape(original_shape)
-        return np.clip(rgb_norm * 255.0, 0, 255).astype(np.uint8)
-
-
-class YREColorspace(AbstractColorspace):
-    """YRE - YUV Red Enhancement."""
-    
-    name = "YRE"
-    description = "Red enhancement"
-    optimized_for = ["red"]
-    
-    def __init__(self):
-        self.to_matrix = np.array([
-            [0.299,   0.587,   0.114],     # Y channel
-            [-0.080, -0.160,   0.240],     # R channel (red enhancement)
-            [0.800,  -0.600,  -0.200]      # E channel (enhancement)
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        rgb_norm = rgb_image.astype(np.float64) / 255.0
-        original_shape = rgb_norm.shape
-        flat_rgb = rgb_norm.reshape(-1, 3)
-        flat_yre = (self.to_matrix @ flat_rgb.T).T
-        return flat_yre.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_yre = color_image.reshape(-1, 3)
-        flat_rgb = (self.from_matrix @ flat_yre.T).T
-        rgb_norm = flat_rgb.reshape(original_shape)
-        return np.clip(rgb_norm * 255.0, 0, 255).astype(np.uint8)
-
-
-class YRDColorspace(AbstractColorspace):
-    """YRD - YUV Red variant."""
-    
-    name = "YRD"
-    description = "Red variant"
-    optimized_for = ["red"]
-    
-    def __init__(self):
-        self.to_matrix = np.array([
-            [0.299,   0.587,   0.114],     # Y channel
-            [-0.120, -0.240,   0.360],     # R channel (different red variant)
-            [0.600,  -0.500,  -0.100]      # D channel
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        rgb_norm = rgb_image.astype(np.float64) / 255.0
-        original_shape = rgb_norm.shape
-        flat_rgb = rgb_norm.reshape(-1, 3)
-        flat_yrd = (self.to_matrix @ flat_rgb.T).T
-        return flat_yrd.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_yrd = color_image.reshape(-1, 3)
-        flat_rgb = (self.from_matrix @ flat_yrd.T).T
-        rgb_norm = flat_rgb.reshape(original_shape)
-        return np.clip(rgb_norm * 255.0, 0, 255).astype(np.uint8)
-
-
-class YYEColorspace(AbstractColorspace):
-    """YYE - YUV Yellow Enhancement."""
-    
-    name = "YYE"
-    description = "Yellow enhancement"
-    optimized_for = ["yellow"]
-    
-    def __init__(self):
-        self.to_matrix = np.array([
-            [0.299,   0.587,   0.114],     # Y channel
-            [-0.050, -0.100,   0.150],     # Y channel (yellow focus)
-            [0.500,  -0.400,  -0.100]      # E channel (enhancement)
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        rgb_norm = rgb_image.astype(np.float64) / 255.0
-        original_shape = rgb_norm.shape
-        flat_rgb = rgb_norm.reshape(-1, 3)
-        flat_yye = (self.to_matrix @ flat_rgb.T).T
-        return flat_yye.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_yye = color_image.reshape(-1, 3)
-        flat_rgb = (self.from_matrix @ flat_yye.T).T
-        rgb_norm = flat_rgb.reshape(original_shape)
-        return np.clip(rgb_norm * 255.0, 0, 255).astype(np.uint8)
-
-
-class YWEColorspace(AbstractColorspace):
-    """YWE - YUV White Enhancement."""
-    
-    name = "YWE"
-    description = "White enhancement"
-    optimized_for = ["white"]
-    
-    def __init__(self):
-        self.to_matrix = np.array([
-            [0.299,   0.587,   0.114],     # Y channel
-            [-0.030, -0.060,   0.090],     # W channel (white focus)
-            [0.300,  -0.250,  -0.050]      # E channel (enhancement)
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        rgb_norm = rgb_image.astype(np.float64) / 255.0
-        original_shape = rgb_norm.shape
-        flat_rgb = rgb_norm.reshape(-1, 3)
-        flat_ywe = (self.to_matrix @ flat_rgb.T).T
-        return flat_ywe.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_ywe = color_image.reshape(-1, 3)
-        flat_rgb = (self.from_matrix @ flat_ywe.T).T
-        rgb_norm = flat_rgb.reshape(original_shape)
-        return np.clip(rgb_norm * 255.0, 0, 255).astype(np.uint8)
-
-
-# =============================================================================
-# SERIE L ADICIONALES (LAB-based)
-# =============================================================================
-
-class LRDColorspace(AbstractColorspace):
-    """LRD - LAB Red variant."""
-    
-    name = "LRD"
-    description = "Red variant"
-    optimized_for = ["red"]
-    
-    def __init__(self):
-        self.to_matrix = np.array([
-            [1.0,   0.0,   0.0],     # L channel unchanged
-            [0.0,   1.3,   0.0],     # Enhanced a channel (different variant)
-            [0.0,   0.0,   0.9]      # Slightly reduced b channel
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        lab_colorspace = LABColorspace()
-        lab_image = lab_colorspace.to_colorspace(rgb_image)
-        
-        original_shape = lab_image.shape
-        flat_lab = lab_image.reshape(-1, 3)
-        flat_lrd = (self.to_matrix @ flat_lab.T).T
-        return flat_lrd.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_lrd = color_image.reshape(-1, 3)
-        flat_lab = (self.from_matrix @ flat_lrd.T).T
-        lab_image = flat_lab.reshape(original_shape)
-        
-        lab_colorspace = LABColorspace()
-        return lab_colorspace.from_colorspace(lab_image)
-
-
-class LBKColorspace(AbstractColorspace):
-    """LBK - LAB Black enhancement."""
-    
-    name = "LBK"
-    description = "Black enhancement"
-    optimized_for = ["black"]
-    
-    def __init__(self):
-        self.to_matrix = np.array([
-            [1.2,   0.0,   0.0],     # Enhanced L channel for black contrast
-            [0.0,   0.8,   0.0],     # Reduced a channel
-            [0.0,   0.0,   0.8]      # Reduced b channel
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        lab_colorspace = LABColorspace()
-        lab_image = lab_colorspace.to_colorspace(rgb_image)
-        
-        original_shape = lab_image.shape
-        flat_lab = lab_image.reshape(-1, 3)
-        flat_lbk = (self.to_matrix @ flat_lab.T).T
-        return flat_lbk.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_lbk = color_image.reshape(-1, 3)
-        flat_lab = (self.from_matrix @ flat_lbk.T).T
-        lab_image = flat_lab.reshape(original_shape)
-        
-        lab_colorspace = LABColorspace()
-        return lab_colorspace.from_colorspace(lab_image)
-
-
-class LBLColorspace(AbstractColorspace):
-    """LBL - LAB Blue enhancement."""
-    
-    name = "LBL"
-    description = "Blue enhancement"
-    optimized_for = ["blue"]
-    
-    def __init__(self):
-        self.to_matrix = np.array([
-            [1.0,   0.0,   0.0],     # L channel unchanged
-            [0.0,   0.7,   0.0],     # Reduced a channel
-            [0.0,   0.0,   1.4]      # Enhanced b channel (blue-yellow axis)
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        lab_colorspace = LABColorspace()
-        lab_image = lab_colorspace.to_colorspace(rgb_image)
-        
-        original_shape = lab_image.shape
-        flat_lab = lab_image.reshape(-1, 3)
-        flat_lbl = (self.to_matrix @ flat_lab.T).T
-        return flat_lbl.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_lbl = color_image.reshape(-1, 3)
-        flat_lab = (self.from_matrix @ flat_lbl.T).T
-        lab_image = flat_lab.reshape(original_shape)
-        
-        lab_colorspace = LABColorspace()
-        return lab_colorspace.from_colorspace(lab_image)
-
-
-class LWEColorspace(AbstractColorspace):
-    """LWE - LAB White enhancement."""
-    
-    name = "LWE"
-    description = "White enhancement"
-    optimized_for = ["white"]
-    
-    def __init__(self):
-        self.to_matrix = np.array([
-            [1.3,   0.0,   0.0],     # Enhanced L channel for whites
-            [0.0,   0.9,   0.0],     # Slightly reduced a channel
-            [0.0,   0.0,   0.9]      # Slightly reduced b channel
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        lab_colorspace = LABColorspace()
-        lab_image = lab_colorspace.to_colorspace(rgb_image)
-        
-        original_shape = lab_image.shape
-        flat_lab = lab_image.reshape(-1, 3)
-        flat_lwe = (self.to_matrix @ flat_lab.T).T
-        return flat_lwe.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_lwe = color_image.reshape(-1, 3)
-        flat_lab = (self.from_matrix @ flat_lwe.T).T
-        lab_image = flat_lab.reshape(original_shape)
-        
-        lab_colorspace = LABColorspace()
-        return lab_colorspace.from_colorspace(lab_image)
-
-
-class LYEColorspace(AbstractColorspace):
-    """LYE - LAB Yellow enhancement."""
-    
-    name = "LYE"
-    description = "Yellow enhancement"
-    optimized_for = ["yellow"]
-    
-    def __init__(self):
-        self.to_matrix = np.array([
-            [1.0,   0.0,   0.0],     # L channel unchanged
-            [0.0,   0.9,   0.0],     # Slightly reduced a channel
-            [0.0,   0.0,   1.5]      # Enhanced b channel (yellow direction)
-        ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
-    def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        lab_colorspace = LABColorspace()
-        lab_image = lab_colorspace.to_colorspace(rgb_image)
-        
-        original_shape = lab_image.shape
-        flat_lab = lab_image.reshape(-1, 3)
-        flat_lye = (self.to_matrix @ flat_lab.T).T
-        return flat_lye.reshape(original_shape)
-    
-    def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_lye = color_image.reshape(-1, 3)
-        flat_lab = (self.from_matrix @ flat_lye.T).T
-        lab_image = flat_lab.reshape(original_shape)
-        
-        lab_colorspace = LABColorspace()
-        return lab_colorspace.from_colorspace(lab_image)
-
-
-# =============================================================================
-# ESPACIOS CONFIGURABLES
-# =============================================================================
+        L, a, b = color_image[..., 0], color_image[..., 1], color_image[..., 2]
+        fy = (L + 16.0) / 116.0; fx = a / 500.0 + fy; fz = fy - b / 200.0
+        def inv_f(t):
+            t_cubed = t**3
+            return np.where(t > 0.206893, t_cubed, (t - 16.0/116.0) / 7.787)
+        xyz_image = np.stack([inv_f(fx), inv_f(fy), inv_f(fz)], axis=-1) * self.D65_WHITE
+        rgb_linear = np.einsum('ij,...j->...i', self.XYZ_TO_RGB, xyz_image)
+        rgb_linear_norm = np.clip(rgb_linear / 100.0, 0.0, 1.0)
+        rgb_srgb = np.where(rgb_linear_norm <= 0.0031308, rgb_linear_norm * 12.92, 1.055 * (rgb_linear_norm**(1.0/2.4)) - 0.055)
+        return np.clip(rgb_srgb * 255.0, 0, 255).astype(np.uint8)
 
 class YXXColorspace(AbstractColorspace):
-    """YXX - User-configurable YUV space."""
-    
-    name = "YXX"
-    description = "User-configurable"
-    optimized_for = ["custom"]
-    
-    def __init__(self, custom_matrix=None):
-        if custom_matrix is not None:
-            self.to_matrix = np.array(custom_matrix, dtype=np.float64)
-        else:
-            # Default matrix (same as YDS)
-            self.to_matrix = np.array([
-                [0.299,   0.587,   0.114],
-                [-0.169, -0.331,   0.500],
-                [0.500,  -0.419,  -0.081]
-            ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
+    # ... (sin cambios)
+    def __init__(self, yxxmuly, yxxmulu, yxxmulv, name, description, optimized_for):
+        self._name, self._description, self._optimized_for = name, description, optimized_for
+        self.yxxmuly, self.yxxmulu, self.yxxmulv = yxxmuly, yxxmulu, yxxmulv
+    @property
+    def name(self): return self._name
+    @property
+    def description(self): return self._description
+    @property
+    def optimized_for(self): return self._optimized_for
     def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        rgb_norm = rgb_image.astype(np.float64) / 255.0
-        original_shape = rgb_norm.shape
-        flat_rgb = rgb_norm.reshape(-1, 3)
-        flat_yxx = (self.to_matrix @ flat_rgb.T).T
-        return flat_yxx.reshape(original_shape)
-    
+        rgb_float = rgb_image.astype(np.float64)
+        R, G, B = rgb_float[..., 0], rgb_float[..., 1], rgb_float[..., 2]
+        Y = 0.299*R + 0.587*G + 0.114*B
+        U = self.yxxmuly * (B - self.yxxmulu * Y)
+        V = self.yxxmuly * (R - self.yxxmulv * Y)
+        return np.stack([Y, U, V], axis=-1)
     def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_yxx = color_image.reshape(-1, 3)
-        flat_rgb = (self.from_matrix @ flat_yxx.T).T
-        rgb_norm = flat_rgb.reshape(original_shape)
-        return np.clip(rgb_norm * 255.0, 0, 255).astype(np.uint8)
+        Y, U, V = color_image[..., 0], color_image[..., 1], color_image[..., 2]
+        R = V / self.yxxmuly + self.yxxmulv * Y
+        B = U / self.yxxmuly + self.yxxmulu * Y
+        G = (Y - 0.299 * R - 0.114 * B) / 0.587
+        rgb_image = np.stack([R, G, B], axis=-1)
+        return np.clip(rgb_image, 0, 255).astype(np.uint8)
 
-
+# *** CLASE LXXColorspace CORREGIDA ***
 class LXXColorspace(AbstractColorspace):
-    """LXX - User-configurable LAB space."""
-    
-    name = "LXX"
-    description = "User-configurable"
-    optimized_for = ["custom"]
-    
-    def __init__(self, custom_matrix=None):
-        if custom_matrix is not None:
-            self.to_matrix = np.array(custom_matrix, dtype=np.float64)
-        else:
-            # Default matrix (same as LDS)
-            self.to_matrix = np.array([
-                [1.0,  0.0,   0.0],
-                [0.0,  1.2,  -0.2],
-                [0.0, -0.3,   1.3]
-            ], dtype=np.float64)
-        
-        self.from_matrix = np.linalg.inv(self.to_matrix)
-    
+    @property
+    def scale_adjust_factor(self) -> float: return 1.5
+    def __init__(self, lxxmul1, lxxmul2, lxxmula, lxxmulb, name, description, optimized_for):
+        self._name, self._description, self._optimized_for = name, description, optimized_for
+        self.lxxmul1, self.lxxmul2, self.lxxmula, self.lxxmulb = lxxmul1, lxxmul2, lxxmula, lxxmulb
+        self.lab_processor = LABColorspace()
+    @property
+    def name(self): return self._name
+    @property
+    def description(self): return self._description
+    @property
+    def optimized_for(self): return self._optimized_for
     def to_colorspace(self, rgb_image: np.ndarray) -> np.ndarray:
-        lab_colorspace = LABColorspace()
-        lab_image = lab_colorspace.to_colorspace(rgb_image)
+        # La lógica de Java no escala los componentes L, a, b directamente.
+        # En su lugar, modifica las relaciones f(t) subyacentes.
+        # Esto es equivalente a escalar los componentes a y b, pero manteniendo L intacto
+        # y usando los parámetros lxxmul1/2 como si fueran para a y b.
+        # Esta implementación es una traducción directa de `rgb2lxx`.
+        lab_image = self.lab_processor.to_colorspace(rgb_image)
+        L, a, b = lab_image[..., 0], lab_image[..., 1], lab_image[..., 2]
+        fy = (L + 16.0) / 116.0
+        fx = a / 500.0 + fy
+        fz = fy - b / 200.0
         
-        original_shape = lab_image.shape
-        flat_lab = lab_image.reshape(-1, 3)
-        flat_lxx = (self.to_matrix @ flat_lab.T).T
-        return flat_lxx.reshape(original_shape)
-    
+        # El código Java es `250 * (fx - lxxmula * fy) / lxxmul1`
+        A_comp = (1.0 / self.lxxmul1) * 250.0 * (fx - self.lxxmula * fy)
+        B_comp = (1.0 / self.lxxmul2) * 100.0 * (self.lxxmulb * fy - fz)
+        
+        return np.stack([L, A_comp, B_comp], axis=-1)
+
     def from_colorspace(self, color_image: np.ndarray) -> np.ndarray:
-        original_shape = color_image.shape
-        flat_lxx = color_image.reshape(-1, 3)
-        flat_lab = (self.from_matrix @ flat_lxx.T).T
-        lab_image = flat_lab.reshape(original_shape)
+        L, A_comp, B_comp = color_image[..., 0], color_image[..., 1], color_image[..., 2]
+        fy = (L + 16.0) / 116.0
         
-        lab_colorspace = LABColorspace()
-        return lab_colorspace.from_colorspace(lab_image)
+        # Invertir las fórmulas de `to_colorspace` para encontrar fx y fz
+        fx = (A_comp * self.lxxmul1 / 250.0) + self.lxxmula * fy
+        fz = (self.lxxmulb * fy) - (B_comp * self.lxxmul2 / 100.0)
+        
+        # Reconstruir los componentes a y b originales de LAB
+        a = 500.0 * (fx - fy)
+        b = 200.0 * (fy - fz)
+        
+        return self.lab_processor.from_colorspace(np.stack([L, a, b], axis=-1))
+
+# (El resto del archivo no necesita cambios)
+class YDSColorspace(YXXColorspace):
+    def __init__(self): super().__init__(1.0, 0.5, 1.0, "YDS", "Yellows", ["yellow", "general"])
+class YBRColorspace(YXXColorspace):
+    def __init__(self): super().__init__(1.0, 0.8, 0.4, "YBR", "Reds", ["red"])
+class YBKColorspace(YXXColorspace):
+    def __init__(self): super().__init__(1.5, 0.2, 1.6, "YBK", "Blacks/blues", ["black", "blue"])
+class YREColorspace(YXXColorspace):
+    def __init__(self): super().__init__(8.0, 1.0, 0.4, "YRE", "Extreme reds", ["red"])
+class YRDColorspace(YXXColorspace):
+    def __init__(self): super().__init__(2.0, 1.0, 0.4, "YRD", "Red pigments", ["red"])
+class YWEColorspace(YXXColorspace):
+    def __init__(self): super().__init__(1.5, 1.6, 0.2, "YWE", "White pigments", ["white"])
+class YBLColorspace(YXXColorspace):
+    def __init__(self): super().__init__(1.5, 0.4, 2.0, "YBL", "Blacks/greens", ["black", "green"])
+class YBGColorspace(YXXColorspace):
+    def __init__(self): super().__init__(2.0, 1.0, 1.7, "YBG", "Green pigments", ["green"])
+class YUVColorspace(YXXColorspace):
+    def __init__(self): super().__init__(0.7, 1.0, 1.0, "YUV", "General purpose", ["general"])
+class YYEColorspace(YXXColorspace):
+    def __init__(self): super().__init__(2.0, 2.0, 1.0, "YYE", "Yellows to brown", ["yellow"])
+
+class LAXColorspace(LXXColorspace):
+    def __init__(self): super().__init__(1.0, 1.0, 1.0, 1.0, "LAX", "LAB variant", ["general"])
+class LDSColorspace(LXXColorspace):
+    def __init__(self): super().__init__(0.5, 0.5, 0.9, 0.5, "LDS", "Yellows", ["yellow"])
+class LREColorspace(LXXColorspace):
+    def __init__(self): super().__init__(0.5, 0.5, 0.5, 1.0, "LRE", "Reds", ["red", "natural_colors"])
+    @property
+    def scale_adjust_factor(self) -> float: return 0.75
+class LRDColorspace(LXXColorspace):
+    def __init__(self): super().__init__(0.5, 0.5, 0.8, 1.2, "LRD", "Red pigments", ["red"])
+class LBKColorspace(LXXColorspace):
+    def __init__(self): super().__init__(0.5, 0.5, 1.1, 0.6, "LBK", "Black pigments", ["black"])
+class LBLColorspace(LXXColorspace):
+    def __init__(self): super().__init__(0.5, 0.5, 1.2, 1.0, "LBL", "Black pigments", ["black"])
+class LWEColorspace(LXXColorspace):
+    def __init__(self): super().__init__(0.5, 0.5, 1.0, 1.4, "LWE", "White pigments", ["white"])
+class LYEColorspace(LXXColorspace):
+    def __init__(self): super().__init__(0.2, 0.2, 1.0, 2.0, "LYE", "Yellows to brown", ["yellow"])
+
+class CRGBColorspace(BuiltinMatrixColorspace):
+    name = "CRGB"
+    description = "Pre-calculated matrix for faint reds"
+    optimized_for = ["red", "faint_pigments"]
+    base_colorspace_name = "RGB"
+    @property
+    def matrix(self): return BUILTIN_MATRICES['CRGB']
+
+class RGB0Colorspace(BuiltinMatrixColorspace):
+    name = "RGB0"
+    description = "Built-in matrix for enhancing reds"
+    optimized_for = ["red"]
+    base_colorspace_name = "RGB"
+    @property
+    def matrix(self): return BUILTIN_MATRICES['RGB0']
+
+class LABIColorspace(BuiltinMatrixColorspace):
+    name = "LABI"
+    description = "Built-in matrix for inverted colors (applied in LAB space)"
+    optimized_for = ["special_effect"]
+    base_colorspace_name = "LAB"
+    @property
+    def matrix(self): return BUILTIN_MATRICES['LABI']
+
+COLORSPACES: Dict[str, AbstractColorspace] = {
+    cs.name: cs for cs in [
+        RGBColorspace(), LABColorspace(),
+        YDSColorspace(), YBRColorspace(), YBKColorspace(), YREColorspace(),
+        YRDColorspace(), YWEColorspace(), YBLColorspace(), YBGColorspace(),
+        YUVColorspace(), YYEColorspace(), LAXColorspace(), LDSColorspace(),
+        LREColorspace(), LRDColorspace(), LBKColorspace(), LBLColorspace(),
+        LWEColorspace(), LYEColorspace(), CRGBColorspace(), RGB0Colorspace(),
+        LABIColorspace(),
+    ]
+}

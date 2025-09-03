@@ -8,11 +8,10 @@ for enhancing archaeological rock art images.
 __version__ = "0.1.0"
 __author__ = "Your Name"
 
-from .decorrelation import DecorrelationStretch
-from .colorspaces import ColorspaceManager, get_available_colorspaces
+from .decorrelation import DecorrelationStretch, ProcessingResult
+from .colorspaces import COLORSPACES
 
-__all__ = [
-    "DecorrelationStretch", 
-    "ColorspaceManager",
-    "get_available_colorspaces"
-]
+# Opcional: una función de ayuda para listar los espacios de color disponibles.
+def list_available_colorspaces():
+    """Returns a list of available colorspace names."""
+    return list(COLORSPACES.keys())
