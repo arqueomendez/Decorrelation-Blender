@@ -79,6 +79,41 @@ Examples:
         help='Verbose output'
     )
     
+    # Invert functionality
+    parser.add_argument(
+        '--invert',
+        action='store_true',
+        help='Apply inversion after decorrelation stretch'
+    )
+    
+    parser.add_argument(
+        '--invert-mode',
+        choices=['full', 'luminance_only', 'selective'],
+        default='full',
+        help='Inversion mode (default: full)'
+    )
+    
+    # Auto Contrast functionality
+    parser.add_argument(
+        '--auto-contrast',
+        action='store_true',
+        help='Apply auto contrast enhancement before decorrelation stretch'
+    )
+    
+    parser.add_argument(
+        '--contrast-clip',
+        type=float,
+        default=0.1,
+        help='Auto contrast clip percentage (0.0-5.0, default: 0.1)'
+    )
+    
+    parser.add_argument(
+        '--preserve-colors',
+        action='store_true',
+        default=True,
+        help='Preserve color relationships during auto contrast (default: True)'
+    )
+    
     args = parser.parse_args()
     
     # Handle list colorspaces command
@@ -111,6 +146,11 @@ Examples:
         print(f"Error: Scale must be between 1 and 100, got {args.scale}", file=sys.stderr)
         sys.exit(1)
     
+    # Validate contrast clip percentage
+    if not 0.0 <= args.contrast_clip <= 5.0:
+        print(f"Error: Contrast clip must be between 0.0 and 5.0, got {args.contrast_clip}", file=sys.stderr)
+        sys.exit(1)
+    
     # Generate output path if not provided
     if not args.output:
         stem = input_path.stem
@@ -124,6 +164,8 @@ Examples:
         print(f"Input: {input_path}")
         print(f"Colorspace: {args.colorspace}")
         print(f"Scale: {args.scale}")
+        print(f"Auto Contrast: {args.auto_contrast} (clip: {args.contrast_clip}%)")
+        print(f"Invert: {args.invert} (mode: {args.invert_mode})")
         print(f"Output: {output_path}")
     
     try:
@@ -131,12 +173,42 @@ Examples:
         if args.verbose:
             print("Processing image...")
         
-        result = process_image(
-            str(input_path),
-            colorspace=args.colorspace,
-            scale=args.scale,
-            output_path=str(output_path)
-        )
+        # Create DStretch processor
+        dstretch = DecorrelationStretch()
+        
+        # Load and process image
+        import cv2
+        image = cv2.imread(str(input_path))
+        if image is None:
+            raise ValueError(f"Could not load image from {input_path}")
+        
+        # Convert BGR to RGB
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # Apply auto contrast if requested (before decorrelation stretch)
+        if args.auto_contrast:
+            if args.verbose:
+                print(f"Applying auto contrast: clip={args.contrast_clip}%, preserve_colors={args.preserve_colors}")
+            image = dstretch.apply_auto_contrast(
+                image,
+                clip_percentage=args.contrast_clip,
+                preserve_colors=args.preserve_colors
+            )
+        
+        # Apply decorrelation stretch
+        result = dstretch.process(image, colorspace=args.colorspace, scale=args.scale)
+        
+        # Apply inversion if requested
+        if args.invert:
+            if args.verbose:
+                print(f"Applying inversion: {args.invert_mode}")
+            result.processed_image = dstretch.apply_invert(
+                result.processed_image, 
+                invert_mode=args.invert_mode
+            )
+        
+        # Save result
+        result.save(str(output_path))
         
         print(f"Successfully processed '{input_path}' -> '{output_path}'")
         

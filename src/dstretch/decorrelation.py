@@ -10,6 +10,8 @@ from scipy.linalg import eigh
 from typing import Tuple, Optional
 import cv2
 from .colorspaces import COLORSPACES, AbstractColorspace, BuiltinMatrixColorspace
+from .invert_processor import InvertProcessor
+from .auto_contrast_processor import AutoContrastProcessor
 
 class ProcessingResult:
     # (Sin cambios)
@@ -24,6 +26,8 @@ class DecorrelationStretch:
         self.colorspaces = COLORSPACES
         self._last_original = None
         self._last_processed = None
+        self.invert_processor = InvertProcessor()
+        self.auto_contrast_processor = AutoContrastProcessor()
     
     def process(self, image: np.ndarray, colorspace: str = "YDS", scale: float = 15.0, 
                 selection_mask: Optional[np.ndarray] = None) -> ProcessingResult:
@@ -110,3 +114,50 @@ class DecorrelationStretch:
         processed_flat = (transform_matrix @ centered_data.T).T
         processed_flat += color_mean
         return processed_flat.reshape(original_shape)
+    
+    def apply_invert(self, image: np.ndarray, invert_mode: str = 'full', 
+                    preserve_hue: bool = False, selective_channels: Optional[list] = None) -> np.ndarray:
+        """
+        Apply inversion to image using ImageJ-compatible algorithm.
+        
+        Args:
+            image: Input image array
+            invert_mode: 'full' | 'luminance_only' | 'selective'
+            preserve_hue: Whether to preserve hue information
+            selective_channels: For selective mode, list of channels to invert
+        
+        Returns:
+            Inverted image array
+        """
+        self.invert_processor.invert_mode = invert_mode
+        self.invert_processor.preserve_hue = preserve_hue
+        return self.invert_processor.process(image, selective_channels)
+    
+    def apply_auto_contrast(self, image: np.ndarray, clip_percentage: float = 0.1, 
+                           preserve_colors: bool = True) -> np.ndarray:
+        """
+        Apply auto contrast enhancement using DStretch's lEnhance algorithm.
+        
+        Args:
+            image: Input image array
+            clip_percentage: Percentage of pixels to ignore at extremes (0.0-5.0)
+            preserve_colors: Whether to preserve color relationships during stretch
+        
+        Returns:
+            Auto contrast enhanced image array
+        """
+        self.auto_contrast_processor.clip_percentage = clip_percentage
+        self.auto_contrast_processor.preserve_colors = preserve_colors
+        return self.auto_contrast_processor.process(image)
+    
+    def get_contrast_statistics(self, image: np.ndarray) -> dict:
+        """
+        Get statistics about image contrast for analysis.
+        
+        Args:
+            image: Input image array
+            
+        Returns:
+            Dictionary with contrast statistics
+        """
+        return self.auto_contrast_processor.get_contrast_statistics(image)

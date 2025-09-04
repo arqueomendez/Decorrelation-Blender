@@ -10,6 +10,14 @@ __author__ = "Your Name"
 
 from .decorrelation import DecorrelationStretch, ProcessingResult
 from .colorspaces import COLORSPACES
+from .invert_processor import InvertProcessor
+from .auto_contrast_processor import AutoContrastProcessor
+from .pixel_inspector import PixelInspectorPanel, ColorSpaceConverter, PixelAnalyzer
+from .zoom_pan_controller import ZoomPanController, ZoomToolbar
+from .gui_infrastructure import (
+    ErrorManager, AdvancedStatusBar, TooltipManager, 
+    PerformanceManager, ThreadManager, GUIInfrastructure
+)
 
 # Opcional: una función de ayuda para listar los espacios de color disponibles.
 def list_available_colorspaces():
