@@ -1,0 +1,175 @@
+        """Apply rolling ball background subtraction."""
+        # Simplified rolling ball using morphological operations
+        kernel_size = int(radius * 2 + 1)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        
+        # Process each channel
+        background_channels = []
+        processed_channels = []
+        
+        for channel in range(3):
+            channel_data = image[:, :, channel]
+            
+            # Rolling ball approximation using closing + opening
+            background = cv2.morphologyEx(channel_data, cv2.MORPH_CLOSE, kernel)
+            background = cv2.morphologyEx(background, cv2.MORPH_OPEN, kernel)
+            
+            # Additional smoothing
+            background = cv2.GaussianBlur(background.astype(np.float32), (0, 0), radius / 4)
+            
+            # Subtract background
+            processed = channel_data.astype(np.float32) - background + 128.0
+            
+            background_channels.append(background)
+            processed_channels.append(processed)
+            
+        # Stack channels
+        background_estimate = np.stack(background_channels, axis=2)
+        processed_image = np.stack(processed_channels, axis=2)
+        
+        # Store background estimate
+        self._background_estimate = np.clip(background_estimate, 0, 255).astype(np.uint8)
+        
+        if preview_background:
+            return self._background_estimate
+            
+        if autoscale_result:
+            processed_image = self._autoscale_result(processed_image)
+            
+        return np.clip(processed_image, 0, 255).astype(np.uint8)
+        
+    def _suppress_fft_stripes(self, image: np.ndarray, tolerance: float) -> np.ndarray:
+        """Suppress horizontal and vertical stripes using FFT filtering."""
+        # Apply FFT
+        f_transform = np.fft.fft2(image)
+        f_shifted = np.fft.fftshift(f_transform)
+        
+        # Create mask to suppress horizontal and vertical frequencies
+        rows, cols = image.shape
+        center_row, center_col = rows // 2, cols // 2
+        
+        # Calculate tolerance in pixels
+        tolerance_pixels = int((tolerance / 100.0) * min(rows, cols) / 2)
+        
+        mask = np.ones((rows, cols), dtype=np.float32)
+        
+        # Suppress horizontal stripes (vertical frequencies)
+        mask[center_row - tolerance_pixels:center_row + tolerance_pixels + 1, :] *= 0.1
+        
+        # Suppress vertical stripes (horizontal frequencies)
+        mask[:, center_col - tolerance_pixels:center_col + tolerance_pixels + 1] *= 0.1
+        
+        # Apply mask and inverse transform
+        f_shifted_filtered = f_shifted * mask
+        f_transform_filtered = np.fft.ifftshift(f_shifted_filtered)
+        filtered_image = np.fft.ifft2(f_transform_filtered)
+        
+        return np.real(filtered_image)
+        
+    def _autoscale_result(self, image: np.ndarray) -> np.ndarray:
+        """Auto-scale result to use full dynamic range."""
+        min_val = np.min(image)
+        max_val = np.max(image)
+        
+        if max_val - min_val > 1e-6:
+            scaled = (image - min_val) * (255.0 / (max_val - min_val))
+        else:
+            scaled = image
+            
+        return scaled
+        
+    def get_background_estimate(self) -> Optional[np.ndarray]:
+        """Get the background estimate from the last flatten operation."""
+        return self._background_estimate
+        
+    def _calculate_flatten_statistics(self, original: np.ndarray, processed: np.ndarray) -> Dict[str, Any]:
+        """Calculate flatten correction statistics."""
+        # Calculate illumination uniformity improvement
+        original_std = np.std(cv2.cvtColor(original, cv2.COLOR_RGB2GRAY))
+        processed_std = np.std(cv2.cvtColor(processed, cv2.COLOR_RGB2GRAY))
+        
+        # Calculate contrast improvement
+        original_contrast = np.std(original)
+        processed_contrast = np.std(processed)
+        
+        return {
+            'illumination_uniformity_improvement': float(original_std / (processed_std + 1e-8)),
+            'contrast_change': float(processed_contrast / (original_contrast + 1e-8)),
+            'background_available': self._background_estimate is not None,
+            'mean_brightness_change': float(np.mean(processed) - np.mean(original)),
+            'dynamic_range_utilization_improvement': float(
+                (np.max(processed) - np.min(processed)) / (np.max(original) - np.min(original) + 1e-8)
+            )
+        }
+
+
+# Utility functions for processor management
+
+def create_processing_pipeline(processor_configs: List[Dict[str, Any]]) -> List[AbstractImageProcessor]:
+    """
+    Create a processing pipeline from configuration list.
+    
+    Args:
+        processor_configs: List of processor configurations
+        
+    Returns:
+        List of configured processors
+    """
+    processors = []
+    
+    for config in processor_configs:
+        processor_type = config.get('type')
+        
+        if processor_type == 'invert':
+            processor = InvertProcessor()
+        elif processor_type == 'auto_contrast':
+            processor = AutoContrastProcessor()
+        elif processor_type == 'color_balance':
+            processor = ColorBalanceProcessor()
+        elif processor_type == 'flatten':
+            processor = FlattenProcessor()
+        else:
+            raise ValueError(f"Unknown processor type: {processor_type}")
+            
+        processors.append(processor)
+        
+    return processors
+
+
+def apply_processing_pipeline(image: np.ndarray, processors: List[AbstractImageProcessor],
+                            processor_params: List[Dict[str, Any]]) -> Tuple[np.ndarray, List[ProcessorResult]]:
+    """
+    Apply a sequence of processors to an image.
+    
+    Args:
+        image: Input RGB image
+        processors: List of processors to apply
+        processor_params: List of parameters for each processor
+        
+    Returns:
+        Tuple of (final_processed_image, list_of_processor_results)
+    """
+    current_image = image.copy()
+    results = []
+    
+    for processor, params in zip(processors, processor_params):
+        processed_image = processor.process(current_image, **params)
+        results.append(processor.get_last_result())
+        current_image = processed_image
+        
+    return current_image, results
+
+
+def get_available_processors() -> Dict[str, str]:
+    """
+    Get list of available independent processors.
+    
+    Returns:
+        Dictionary mapping processor names to descriptions
+    """
+    return {
+        'invert': 'Image inversion with multiple modes',
+        'auto_contrast': 'Automatic contrast enhancement preserving colors',
+        'color_balance': 'Color balance correction using Gray World and other algorithms',
+        'flatten': 'Uneven illumination correction using multiple methods'
+    }

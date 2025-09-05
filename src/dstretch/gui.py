@@ -1,392 +1,403 @@
 """
-Graphical user interface for DStretch Python.
+DStretch GUI - Graphical User Interface
+=======================================
 
-Replicates the DStretch ImageJ plugin interface using Tkinter,
-providing the same workflow and visual layout.
+Tkinter-based GUI that replicates the ImageJ DStretch plugin interface
+with support for the new independent preprocessing pipeline.
+
+Author: Claude Sonnet 4 (Based on ImageJ DStretch v6.3 by Jon Harman)
+Version: 2.0
+Date: January 2025
 """
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from PIL import Image, ImageTk
 import numpy as np
+from PIL import Image, ImageTk
+import cv2
 from pathlib import Path
 import threading
-from typing import Optional
+import logging
+from typing import Optional, Dict, Any, List
 
-from . import DecorrelationStretch, list_available_colorspaces as get_available_colorspaces
-from .pixel_inspector import PixelInspectorPanel
-from .zoom_pan_controller import ZoomPanController, ZoomToolbar
-from .gui_infrastructure import GUIInfrastructure, AdvancedStatusBar
+# Import DStretch components
+from .decorrelation import DecorrelationStretch
+from .independent_processors import (
+    PreprocessingPipeline, create_preprocessing_config, quick_enhance
+)
+from . import list_available_colorspaces, get_pipeline_info, get_available_processors
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Try to import advanced GUI components (optional)
+try:
+    from .gui_infrastructure import GUIInfrastructure, AdvancedStatusBar
+    from .pixel_inspector import PixelInspectorPanel
+    from .zoom_pan_controller import ZoomPanController
+    ADVANCED_GUI_AVAILABLE = True
+except ImportError:
+    ADVANCED_GUI_AVAILABLE = False
+    logger.info("Advanced GUI components not available, using basic interface")
 
 
 class DStretchGUI:
-    """Main GUI application for DStretch."""
+    """
+    Main DStretch GUI application.
+    Replicates the ImageJ DStretch interface with new pipeline architecture.
+    """
     
     def __init__(self):
+        """Initialize the GUI application."""
         self.root = tk.Tk()
-        self.root.title("DStretch Python")
-        self.root.geometry("1200x700")  # Increased width for inspector panel
-        self.root.minsize(900, 500)  # Adjusted minimum size
+        self.root.title("DStretch Python v2.0 - Independent Pipeline")
+        self.root.geometry("1000x700")
         
-        # Application state
+        # Core components
         self.dstretch = DecorrelationStretch()
+        self.preprocessing_pipeline = PreprocessingPipeline()
+        
+        # Image data
         self.original_image = None
         self.processed_image = None
+        self.preprocessed_image = None
+        self.last_result = None
+        
+        # GUI state
         self.current_colorspace = "YDS"
-        self.current_scale = 15.0
+        self.processing_thread = None
         
-        # Initialize infrastructure
-        self.infrastructure = GUIInfrastructure(self.root)
+        # Initialize status_var FIRST
+        self.status_var = tk.StringVar()
         
-        # UI components
-        self.image_display = None
-        self.colorspace_buttons = {}
-        self.scale_var = None
-        self.status_var = None
-        self.process_button = None
-        self.reset_button = None
+        # Advanced GUI infrastructure (if available)
+        self.infrastructure = None
+        self.status_bar = None
         self.pixel_inspector = None
         self.zoom_controller = None
-        self.zoom_toolbar = None
-        self.status_bar = None
         
+        # Set up GUI
         self._setup_ui()
         self._setup_menu()
-        self._update_ui_state()
+        
+        # Initialize status AFTER UI setup
+        self._set_status("Ready - Load an image to begin")
+        
+        logger.info("DStretch GUI initialized successfully")
     
     def _setup_ui(self):
-        """Setup the main user interface."""
-        # Create main frame
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Configure grid weights
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=2)  # Image panel gets more space
-        main_frame.columnconfigure(1, weight=1)  # Control panel
-        main_frame.columnconfigure(2, weight=1)  # Inspector panel
-        main_frame.rowconfigure(0, weight=1)
+        """Set up the main user interface."""
+        # Main container
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Left panel: Image display
-        self._setup_image_panel(main_frame)
+        left_frame = ttk.LabelFrame(main_frame, text="Image", padding=5)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
         
-        # Center panel: Controls
-        self._setup_control_panel(main_frame)
+        # Image canvas
+        self.canvas = tk.Canvas(left_frame, bg='gray90', width=500, height=400)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
         
-        # Right panel: Pixel Inspector (after zoom controller is ready)
-        self._setup_inspector_panel(main_frame)
+        # Right panel: Controls
+        right_frame = ttk.Frame(main_frame)
+        right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
         
-        # Connect zoom controller to inspector
-        if self.pixel_inspector and self.zoom_controller:
-            self.pixel_inspector.set_zoom_controller(self.zoom_controller)
+        self._setup_file_controls(right_frame)
+        self._setup_preprocessing_controls(right_frame)
+        self._setup_colorspace_controls(right_frame)
+        self._setup_processing_controls(right_frame)
         
-        # Bottom: Status bar
-        self._setup_status_bar()
+        # Status bar (use existing status_var)
+        status_frame = ttk.Frame(self.root)
+        status_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=2)
+        ttk.Label(status_frame, textvariable=self.status_var, relief=tk.SUNKEN).pack(fill=tk.X)
     
-    def _setup_image_panel(self, parent):
-        """Setup the image display panel with zoom and pan capabilities."""
-        image_frame = ttk.LabelFrame(parent, text="Image", padding="5")
-        image_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
+    def _setup_file_controls(self, parent):
+        """Set up file operation controls."""
+        file_frame = ttk.LabelFrame(parent, text="File Operations", padding=5)
+        file_frame.pack(fill=tk.X, pady=(0, 5))
         
-        # Configure grid
-        image_frame.columnconfigure(0, weight=1)
-        image_frame.rowconfigure(1, weight=1)  # Canvas gets the space
+        ttk.Button(file_frame, text="Open Image", 
+                  command=self._open_image).pack(fill=tk.X, pady=2)
+        ttk.Button(file_frame, text="Save Result", 
+                  command=self._save_image).pack(fill=tk.X, pady=2)
         
-        # Create zoom toolbar
-        toolbar_frame = ttk.Frame(image_frame)
-        toolbar_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-        
-        # Canvas for image display with enhanced capabilities
-        self.image_canvas = tk.Canvas(
-            image_frame,
-            bg='lightgray',
-            width=400,
-            height=300
-        )
-        self.image_canvas.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Initialize zoom controller
-        self.zoom_controller = ZoomPanController(
-            self.image_canvas,
-            update_callback=self._on_zoom_pan_update
-        )
-        
-        # Initialize zoom toolbar
-        self.zoom_toolbar = ZoomToolbar(toolbar_frame, self.zoom_controller)
-        self.zoom_toolbar.grid(row=0, column=0, sticky=tk.W)
-        
-        # Scrollbars for large images (managed by zoom controller)
-        v_scrollbar = ttk.Scrollbar(image_frame, orient=tk.VERTICAL, command=self.image_canvas.yview)
-        h_scrollbar = ttk.Scrollbar(image_frame, orient=tk.HORIZONTAL, command=self.image_canvas.xview)
-        
-        self.image_canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
-        
-        v_scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
-        h_scrollbar.grid(row=2, column=0, sticky=(tk.W, tk.E))
-        
-        # Placeholder text
-        self.image_canvas.create_text(
-            200, 150,
-            text="No image loaded\nUse File -> Open Image\n\nMouse: Wheel=Zoom, Right-drag=Pan\n(or Shift+drag)",
-            font=('Arial', 12),
-            fill='gray',
-            tags='placeholder'
-        )
+        # Reset button
+        self.reset_button = ttk.Button(file_frame, text="Reset to Original", 
+                                      command=self._reset_image, state=tk.DISABLED)
+        self.reset_button.pack(fill=tk.X, pady=2)
     
-    def _setup_control_panel(self, parent):
-        """Setup the control panel with colorspace buttons and scale slider."""
-        control_frame = ttk.LabelFrame(parent, text="Controls", padding="10")
-        control_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5)
+    def _setup_preprocessing_controls(self, parent):
+        """Set up preprocessing controls."""
+        preprocess_frame = ttk.LabelFrame(parent, text="Preprocessing", padding=5)
+        preprocess_frame.pack(fill=tk.X, pady=(0, 5))
         
-        # Colorspace selection
-        cs_frame = ttk.LabelFrame(control_frame, text="Color Spaces", padding="10")
-        cs_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        # Preset selection
+        ttk.Label(preprocess_frame, text="Preset:").pack(anchor=tk.W)
+        self.preset_var = tk.StringVar(value="custom")
+        preset_combo = ttk.Combobox(preprocess_frame, textvariable=self.preset_var,
+                                   values=["custom", "standard", "faint_reds", "yellows", "high_contrast"],
+                                   state="readonly")
+        preset_combo.pack(fill=tk.X, pady=(0, 5))
+        preset_combo.bind("<<ComboboxSelected>>", self._on_preset_changed)
         
-        self._setup_colorspace_buttons(cs_frame)
-        
-        # Scale control
-        scale_frame = ttk.LabelFrame(control_frame, text="Enhancement Scale", padding="10")
-        scale_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        self.scale_var = tk.DoubleVar(value=15.0)
-        scale_slider = ttk.Scale(
-            scale_frame,
-            from_=1.0,
-            to=100.0,
-            orient=tk.HORIZONTAL,
-            variable=self.scale_var,
-            command=self._on_scale_change
-        )
-        scale_slider.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-        
-        # Scale value display
-        self.scale_label = ttk.Label(scale_frame, text="15")
-        self.scale_label.grid(row=1, column=0)
-        
-        scale_frame.columnconfigure(0, weight=1)
-        
-        # Pre-processing controls
-        preprocess_frame = ttk.LabelFrame(control_frame, text="Pre-Processing", padding="10")
-        preprocess_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        # Individual preprocessing options
+        self.invert_var = tk.BooleanVar()
+        ttk.Checkbutton(preprocess_frame, text="Invert", 
+                       variable=self.invert_var).pack(anchor=tk.W)
         
         self.auto_contrast_var = tk.BooleanVar()
-        self.auto_contrast_check = ttk.Checkbutton(
-            preprocess_frame,
-            text="Auto Contrast",
-            variable=self.auto_contrast_var
-        )
-        self.auto_contrast_check.grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        ttk.Checkbutton(preprocess_frame, text="Auto Contrast", 
+                       variable=self.auto_contrast_var).pack(anchor=tk.W)
         
-        # Auto contrast parameters
-        contrast_params_frame = ttk.Frame(preprocess_frame)
-        contrast_params_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        self.color_balance_var = tk.BooleanVar()
+        ttk.Checkbutton(preprocess_frame, text="Color Balance", 
+                       variable=self.color_balance_var).pack(anchor=tk.W)
         
-        ttk.Label(contrast_params_frame, text="Clip %:").grid(row=0, column=0, sticky=tk.W)
+        self.flatten_var = tk.BooleanVar()
+        ttk.Checkbutton(preprocess_frame, text="Flatten Illumination", 
+                       variable=self.flatten_var).pack(anchor=tk.W)
+        
+        # Advanced preprocessing options
+        advanced_frame = ttk.LabelFrame(preprocess_frame, text="Advanced Options", padding=2)
+        advanced_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        # Auto Contrast options
+        ttk.Label(advanced_frame, text="Contrast Clip %:", font=("TkDefaultFont", 8)).pack(anchor=tk.W)
         self.contrast_clip_var = tk.DoubleVar(value=0.1)
-        contrast_clip_spin = ttk.Spinbox(
-            contrast_params_frame,
-            from_=0.0,
-            to=5.0,
-            increment=0.1,
-            textvariable=self.contrast_clip_var,
-            width=6
-        )
-        contrast_clip_spin.grid(row=0, column=1, sticky=tk.W, padx=(5, 10))
+        ttk.Scale(advanced_frame, from_=0.0, to=2.0, variable=self.contrast_clip_var,
+                 orient=tk.HORIZONTAL).pack(fill=tk.X)
         
-        self.preserve_colors_var = tk.BooleanVar(value=True)
-        preserve_colors_check = ttk.Checkbutton(
-            contrast_params_frame,
-            text="Preserve Colors",
-            variable=self.preserve_colors_var
-        )
-        preserve_colors_check.grid(row=0, column=2, sticky=tk.W)
+        # Color Balance options
+        ttk.Label(advanced_frame, text="Balance Method:", font=("TkDefaultFont", 8)).pack(anchor=tk.W)
+        self.balance_method_var = tk.StringVar(value="gray_world")
+        ttk.Combobox(advanced_frame, textvariable=self.balance_method_var,
+                    values=["gray_world", "white_patch", "manual"],
+                    state="readonly", font=("TkDefaultFont", 8)).pack(fill=tk.X)
         
-        preprocess_frame.columnconfigure(0, weight=1)
+        ttk.Label(advanced_frame, text="Balance Strength:", font=("TkDefaultFont", 8)).pack(anchor=tk.W)
+        self.balance_strength_var = tk.DoubleVar(value=1.0)
+        ttk.Scale(advanced_frame, from_=0.0, to=2.0, variable=self.balance_strength_var,
+                 orient=tk.HORIZONTAL).pack(fill=tk.X)
         
-        # Invert control
-        invert_frame = ttk.LabelFrame(control_frame, text="Post-Processing", padding="10")
-        invert_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        # Flatten options
+        ttk.Label(advanced_frame, text="Flatten Method:", font=("TkDefaultFont", 8)).pack(anchor=tk.W)
+        self.flatten_method_var = tk.StringVar(value="bandpass")
+        ttk.Combobox(advanced_frame, textvariable=self.flatten_method_var,
+                    values=["bandpass", "gaussian", "sliding_paraboloid", "rolling_ball"],
+                    state="readonly", font=("TkDefaultFont", 8)).pack(fill=tk.X)
         
-        self.invert_var = tk.BooleanVar()
-        self.invert_check = ttk.Checkbutton(
-            invert_frame,
-            text="Apply Inversion",
-            variable=self.invert_var
-        )
-        self.invert_check.grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        ttk.Label(advanced_frame, text="Large Structures:", font=("TkDefaultFont", 8)).pack(anchor=tk.W)
+        self.flatten_large_var = tk.DoubleVar(value=40.0)
+        ttk.Scale(advanced_frame, from_=10.0, to=100.0, variable=self.flatten_large_var,
+                 orient=tk.HORIZONTAL).pack(fill=tk.X)
         
-        self.invert_mode_var = tk.StringVar(value="full")
-        invert_mode_frame = ttk.Frame(invert_frame)
-        invert_mode_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
-        
-        ttk.Label(invert_mode_frame, text="Mode:").grid(row=0, column=0, sticky=tk.W)
-        invert_combo = ttk.Combobox(
-            invert_mode_frame,
-            textvariable=self.invert_mode_var,
-            values=["full", "luminance_only", "selective"],
-            state="readonly",
-            width=12
-        )
-        invert_combo.grid(row=0, column=1, sticky=tk.W, padx=(5, 0))
-        
-        invert_frame.columnconfigure(0, weight=1)
-        
-        # Action buttons
-        button_frame = ttk.Frame(control_frame)
-        button_frame.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
-        
-        self.process_button = ttk.Button(
-            button_frame,
-            text="Process Image",
-            command=self._process_image,
-            state=tk.DISABLED
-        )
-        self.process_button.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-        
-        self.reset_button = ttk.Button(
-            button_frame,
-            text="Reset to Original",
-            command=self._reset_to_original,
-            state=tk.DISABLED
-        )
-        self.reset_button.grid(row=1, column=0, sticky=(tk.W, tk.E))
-        
-        button_frame.columnconfigure(0, weight=1)
-        control_frame.columnconfigure(0, weight=1)
+        ttk.Label(advanced_frame, text="Small Structures:", font=("TkDefaultFont", 8)).pack(anchor=tk.W)
+        self.flatten_small_var = tk.DoubleVar(value=3.0)
+        ttk.Scale(advanced_frame, from_=1.0, to=10.0, variable=self.flatten_small_var,
+                 orient=tk.HORIZONTAL).pack(fill=tk.X)
     
-    def _setup_inspector_panel(self, parent):
-        """Setup the pixel inspector panel."""
-        # Create the pixel inspector
-        self.pixel_inspector = PixelInspectorPanel(parent, self.image_canvas)
+    def _setup_colorspace_controls(self, parent):
+        """Set up colorspace selection controls."""
+        colorspace_frame = ttk.LabelFrame(parent, text="Color Spaces", padding=5)
+        colorspace_frame.pack(fill=tk.X, pady=(0, 5))
         
-        # Grid the inspector frame
-        self.pixel_inspector.grid(
-            row=0, column=2, 
-            sticky=(tk.W, tk.E, tk.N, tk.S), 
-            padx=(5, 0)
-        )
-    
-    def _on_zoom_pan_update(self):
-        """Callback for zoom/pan updates."""
-        # Update zoom toolbar display
-        if self.zoom_toolbar:
-            self.zoom_toolbar.update_zoom_display()
+        # Get available colorspaces
+        self.colorspaces = list_available_colorspaces()
+        self.colorspace_buttons = {}
         
-        # Update status bar with zoom info
-        if self.zoom_controller and self.zoom_controller.current_image and self.status_bar:
-            zoom_factor = self.zoom_controller.get_zoom_factor()
-            self.status_bar.set_zoom_info(zoom_factor)
-    
-    def _setup_colorspace_buttons(self, parent):
-        """Setup the grid of colorspace buttons."""
-        available_colorspaces = get_available_colorspaces()
+        # Create colorspace button grid (replicating ImageJ DStretch layout)
+        button_layout = [
+            ['YDS', 'YBR', 'YBK', 'YRE'],
+            ['YRD', 'YWE', 'YBL', 'YBG'],
+            ['YUV', 'YYE', 'LAX', 'LDS'],
+            ['LRE', 'LRD', 'LBK', 'LBL'],
+            ['LWE', 'LYE', 'RGB', 'LAB'],
+            ['CRGB', 'RGB0', 'LABI', '']
+        ]
         
-        # Organize colorspaces in rows (4 buttons per row to match DStretch layout)
-        colorspace_names = available_colorspaces
-        rows = []
-        for i in range(0, len(colorspace_names), 4):
-            rows.append(colorspace_names[i:i+4])
-        
-        # Create buttons with tooltips
-        colorspace_descriptions = {
-            'YDS': 'General purpose, excellent for yellows',
-            'CRGB': 'Pre-calculated matrix for faint reds',
-            'LDS': 'General, better than YDS for yellows',
-            'LRE': 'Excellent for reds, natural colors',
-            'YBR': 'Optimized for reds',
-            'YBK': 'Specialized for blacks and blues',
-            'YRE': 'Extreme red enhancement',
-            'YRD': 'Red pigments',
-            'YWE': 'White pigments',
-            'YBL': 'Blacks/greens',
-            'YBG': 'Green pigments',
-            'YUV': 'General purpose',
-            'YYE': 'Yellows to brown',
-            'LAX': 'LAB variant',
-            'LRD': 'Red pigments (LAB)',
-            'LBK': 'Black pigments',
-            'LBL': 'Black alternative',
-            'LWE': 'White pigments (LAB)',
-            'LYE': 'Yellows to brown (LAB)',
-            'RGB': 'Standard RGB',
-            'LAB': 'CIE LAB standard',
-            'RGB0': 'Built-in red enhancement',
-            'LABI': 'Built-in LAB inversion'
-        }
-        
-        for row_idx, row in enumerate(rows):
+        for row_idx, row in enumerate(button_layout):
+            row_frame = ttk.Frame(colorspace_frame)
+            row_frame.pack(fill=tk.X, pady=1)
+            
             for col_idx, cs_name in enumerate(row):
-                btn = ttk.Button(
-                    parent,
-                    text=cs_name,
-                    width=8,
-                    command=lambda name=cs_name: self._select_colorspace(name)
-                )
-                btn.grid(row=row_idx, column=col_idx, padx=2, pady=2, sticky=tk.W+tk.E)
-                self.colorspace_buttons[cs_name] = btn
-                
-                # Add tooltip
-                if cs_name in colorspace_descriptions:
-                    self.infrastructure.tooltip_manager.add_colorspace_tooltip(
-                        btn, cs_name, colorspace_descriptions[cs_name]
+                if cs_name and cs_name in self.colorspaces:
+                    btn = ttk.Button(
+                        row_frame, text=cs_name, width=6,
+                        command=lambda name=cs_name: self._select_colorspace(name)
                     )
-        
-        # Configure grid weights
-        for i in range(4):
-            parent.columnconfigure(i, weight=1)
+                    btn.pack(side=tk.LEFT, padx=1, fill=tk.X, expand=True)
+                    self.colorspace_buttons[cs_name] = btn
+                elif cs_name:
+                    ttk.Frame(row_frame, width=50).pack(side=tk.LEFT, padx=1)
         
         # Highlight default colorspace
-        self._highlight_colorspace_button("YDS")
+        self._select_colorspace(self.current_colorspace)
+    
+    def _setup_processing_controls(self, parent):
+        """Set up main processing controls."""
+        process_frame = ttk.LabelFrame(parent, text="Processing", padding=5)
+        process_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        # Scale control
+        ttk.Label(process_frame, text="Scale:").pack(anchor=tk.W)
+        self.scale_var = tk.DoubleVar(value=15.0)
+        scale_frame = ttk.Frame(process_frame)
+        scale_frame.pack(fill=tk.X, pady=2)
+        
+        ttk.Scale(scale_frame, from_=1.0, to=100.0, variable=self.scale_var,
+                 orient=tk.HORIZONTAL).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        scale_label = ttk.Label(scale_frame, text="15", width=4)
+        scale_label.pack(side=tk.RIGHT, padx=(5, 0))
+        
+        # Update scale label
+        def update_scale_label(*args):
+            scale_label.config(text=f"{int(self.scale_var.get())}")
+        self.scale_var.trace('w', update_scale_label)
+        
+        # Main process button
+        self.process_button = ttk.Button(
+            process_frame, text="Process Image", 
+            command=self._process_image, state=tk.DISABLED
+        )
+        self.process_button.pack(fill=tk.X, pady=(10, 5))
+        
+        # Individual processor buttons
+        individual_frame = ttk.LabelFrame(process_frame, text="Individual Tools", padding=2)
+        individual_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        # Row 1: Invert and Auto Contrast
+        row1 = ttk.Frame(individual_frame)
+        row1.pack(fill=tk.X, pady=1)
+        ttk.Button(row1, text="Invert Only", 
+                  command=self._apply_invert_only).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,2))
+        ttk.Button(row1, text="Auto Contrast", 
+                  command=self._apply_auto_contrast_only).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2,0))
+        
+        # Row 2: Color Balance and Flatten
+        row2 = ttk.Frame(individual_frame)
+        row2.pack(fill=tk.X, pady=1)
+        ttk.Button(row2, text="Color Balance", 
+                  command=self._apply_color_balance_only).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,2))
+        ttk.Button(row2, text="Flatten", 
+                  command=self._apply_flatten_only).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2,0))
+        
+        # Row 3: Hue Shift and Quick Enhance
+        row3 = ttk.Frame(individual_frame)
+        row3.pack(fill=tk.X, pady=1)
+        ttk.Button(row3, text="Hue Shift", 
+                  command=self._apply_hue_shift_only).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,2))
+        ttk.Button(row3, text="Quick Enhance", 
+                  command=self._quick_enhance).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2,0))
     
     def _setup_menu(self):
-        """Setup the application menu."""
+        """Set up application menu."""
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
         
         # File menu
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
-        
-        file_menu.add_command(label="Open Image...", command=self._open_image, accelerator="Ctrl+O")
-        file_menu.add_separator()
-        file_menu.add_command(label="Save As...", command=self._save_image, accelerator="Ctrl+S")
+        file_menu.add_command(label="Open Image...", command=self._open_image)
+        file_menu.add_command(label="Save Result...", command=self._save_image)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit)
+        
+        # Tools menu
+        tools_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Tools", menu=tools_menu)
+        tools_menu.add_command(label="Pipeline Info", command=self._show_pipeline_info)
+        tools_menu.add_command(label="Available Processors", command=self._show_processors)
+        tools_menu.add_separator()
+        tools_menu.add_command(label="Reset All Settings", command=self._reset_all_settings)
         
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
-        
         help_menu.add_command(label="About", command=self._show_about)
-        
-        # Keyboard shortcuts
-        self.root.bind('<Control-o>', lambda e: self._open_image())
-        self.root.bind('<Control-s>', lambda e: self._save_image())
     
-    def _setup_status_bar(self):
-        """Setup the enhanced status bar."""
-        self.status_bar = AdvancedStatusBar(self.root)
-        self.status_bar.grid(
-            row=1, column=0,
-            sticky=(tk.W, tk.E),
-            padx=5, pady=(0, 5)
-        )
+    # Event handlers
+    
+    def _on_preset_changed(self, event=None):
+        """Handle preset selection change."""
+        preset = self.preset_var.get()
+        if preset == "custom":
+            return
         
-        # Connect infrastructure
-        self.infrastructure.set_status_bar(self.status_bar)
+        # Apply preset configurations
+        preset_configs = {
+            "standard": {
+                "auto_contrast": True,
+                "color_balance": True,
+                "contrast_clip": 0.1,
+                "balance_strength": 0.8
+            },
+            "faint_reds": {
+                "auto_contrast": True,
+                "color_balance": True,
+                "contrast_clip": 0.05,
+                "balance_strength": 1.0
+            },
+            "yellows": {
+                "auto_contrast": True,
+                "flatten": True,
+                "contrast_clip": 0.2,
+                "flatten_method": "bandpass"
+            },
+            "high_contrast": {
+                "auto_contrast": True,
+                "contrast_clip": 0.5,
+                "balance_strength": 1.2
+            }
+        }
         
-        # Initialize with default values
-        self.status_bar.set_main_status("Ready - Load an image to begin")
+        if preset in preset_configs:
+            config = preset_configs[preset]
+            
+            # Reset all
+            self.auto_contrast_var.set(config.get("auto_contrast", False))
+            self.color_balance_var.set(config.get("color_balance", False))
+            self.flatten_var.set(config.get("flatten", False))
+            self.invert_var.set(config.get("invert", False))
+            
+            # Advanced options
+            self.contrast_clip_var.set(config.get("contrast_clip", 0.1))
+            self.balance_strength_var.set(config.get("balance_strength", 1.0))
+            if "flatten_method" in config:
+                self.flatten_method_var.set(config["flatten_method"])
+            
+            self._set_status(f"Applied {preset} preset")
+    
+    def _select_colorspace(self, colorspace_name):
+        """Select a colorspace and update UI."""
+        if colorspace_name not in self.colorspaces:
+            return
+        
+        # Update current selection
+        self.current_colorspace = colorspace_name
+        
+        # Update button text to show selection
+        for name, button in self.colorspace_buttons.items():
+            if name == colorspace_name:
+                button.configure(text=f"[{name}]")
+            else:
+                button.configure(text=name)
+        
+        self._set_status(f"Selected colorspace: {colorspace_name}")
+    
+    # Image operations
     
     def _open_image(self):
         """Open an image file."""
         file_types = [
-            ('Image files', '*.jpg *.jpeg *.png *.tiff *.tif *.bmp'),
-            ('JPEG files', '*.jpg *.jpeg'),
-            ('PNG files', '*.png'),
-            ('TIFF files', '*.tiff *.tif'),
-            ('All files', '*.*')
+            ("Image files", "*.jpg *.jpeg *.png *.tiff *.tif *.bmp"),
+            ("JPEG files", "*.jpg *.jpeg"),
+            ("PNG files", "*.png"),
+            ("TIFF files", "*.tiff *.tif"),
+            ("All files", "*.*")
         ]
         
         filename = filedialog.askopenfilename(
@@ -396,207 +407,433 @@ class DStretchGUI:
         
         if filename:
             try:
-                self._load_image(filename)
-                self.status_bar.set_main_status(f"Loaded: {Path(filename).name}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not load image:\n{e}")
-    
-    def _load_image(self, filename):
-        """Load and display an image."""
-        # Load image using PIL
-        pil_image = Image.open(filename)
-        
-        # Convert to RGB if necessary
-        if pil_image.mode != 'RGB':
-            pil_image = pil_image.convert('RGB')
-        
-        # Store original image as numpy array
-        self.original_image = np.array(pil_image)
-        self.processed_image = None
-        
-        # Set image in zoom controller (this will handle display)
-        if self.zoom_controller:
-            self.zoom_controller.set_image(pil_image)
-        
-        # Update pixel inspector with new image
-        if self.pixel_inspector:
-            self.pixel_inspector.set_image(self.original_image)
-        
-        # Update UI state
-        self._update_ui_state()
-        
-        # Update status bar with image info
-        if self.status_bar:
-            self.status_bar.set_image_info(
-                pil_image.width, pil_image.height, filename
-            )
-    
-    def _select_colorspace(self, colorspace_name):
-        """Select a colorspace."""
-        self.current_colorspace = colorspace_name
-        self._highlight_colorspace_button(colorspace_name)
-        self.status_bar.set_main_status(f"Selected colorspace: {colorspace_name}")
-    
-    def _highlight_colorspace_button(self, colorspace_name):
-        """Highlight the selected colorspace button."""
-        # Reset all buttons to normal style
-        for btn in self.colorspace_buttons.values():
-            btn.configure(style='TButton')
-        
-        # Highlight selected button using a different approach for ttk
-        if colorspace_name in self.colorspace_buttons:
-            # Create a custom style for the selected button
-            style = ttk.Style()
-            style.configure('Selected.TButton', background='lightblue')
-            self.colorspace_buttons[colorspace_name].configure(style='Selected.TButton')
-    
-    def _on_scale_change(self, value):
-        """Handle scale slider change."""
-        self.current_scale = float(value)
-        self.scale_label.configure(text=f"{int(self.current_scale)}")
-    
-    def _process_image(self):
-        """Process the current image with selected parameters."""
-        if self.original_image is None:
-            messagebox.showerror("Error", "No image loaded")
-            return
-        
-        # Disable UI during processing
-        self.process_button.configure(state=tk.DISABLED)
-        self.status_bar.set_main_status("Processing...")
-        self.status_bar.show_progress(0)
-        self.root.update()
-        
-        # Process in separate thread to keep UI responsive
-        def process_thread():
-            try:
-                # Make a copy to avoid modifying original
-                processing_image = self.original_image.copy()
+                # Load image
+                pil_image = Image.open(filename)
                 
-                # Apply auto contrast if requested (before decorrelation stretch)
-                if self.auto_contrast_var.get():
-                    processing_image = self.dstretch.apply_auto_contrast(
-                        processing_image,
-                        clip_percentage=self.contrast_clip_var.get(),
-                        preserve_colors=self.preserve_colors_var.get()
-                    )
+                # Convert to RGB if necessary
+                if pil_image.mode != 'RGB':
+                    pil_image = pil_image.convert('RGB')
                 
-                # Apply decorrelation stretch
-                result = self.dstretch.process(
-                    processing_image,
-                    colorspace=self.current_colorspace,
-                    scale=self.current_scale
-                )
+                # Convert to numpy array
+                self.original_image = np.array(pil_image)
+                self.processed_image = self.original_image.copy()
+                self.preprocessed_image = None
+                self.last_result = None
                 
-                # Store processed image
-                self.processed_image = result.processed_image
+                # Display image
+                self._display_image(self.original_image)
                 
-                # Apply inversion if requested
-                if self.invert_var.get():
-                    self.processed_image = self.dstretch.apply_invert(
-                        self.processed_image,
-                        invert_mode=self.invert_mode_var.get()
-                    )
+                # Update UI state
+                self._update_ui_state()
                 
-                # Update UI on main thread
-                self.root.after(0, self._on_processing_complete, True)
+                self._set_status(f"Loaded: {Path(filename).name} ({self.original_image.shape[1]}x{self.original_image.shape[0]})")
                 
             except Exception as e:
-                self.root.after(0, self._on_processing_complete, False, str(e))
-        
-        threading.Thread(target=process_thread, daemon=True).start()
-    
-    def _on_processing_complete(self, success, error_message=None):
-        """Handle processing completion."""
-        # Re-enable UI
-        self.process_button.configure(state=tk.NORMAL)
-        self.status_bar.hide_progress()
-        
-        if success:
-            # Convert processed image to PIL and display via zoom controller
-            pil_image = Image.fromarray(self.processed_image)
-            if self.zoom_controller:
-                self.zoom_controller.set_image(pil_image)
-            
-            # Update pixel inspector with processed image
-            if self.pixel_inspector:
-                self.pixel_inspector.set_image(self.processed_image)
-            
-            # Update status bar with processing info
-            self.status_bar.set_main_status(f"Processed with {self.current_colorspace}, scale {int(self.current_scale)}")
-            self.status_bar.set_processing_info(self.current_colorspace, self.current_scale)
-            self.reset_button.configure(state=tk.NORMAL)
-        else:
-            self.infrastructure.error_manager.handle_error(
-                Exception(error_message), "Image Processing", error_message
-            )
-            self.status_bar.set_main_status("Processing failed")
-    
-    def _reset_to_original(self):
-        """Reset to original image."""
-        if self.original_image is not None:
-            pil_image = Image.fromarray(self.original_image)
-            if self.zoom_controller:
-                self.zoom_controller.set_image(pil_image)
-            self.processed_image = None
-            
-            # Update pixel inspector with original image
-            if self.pixel_inspector:
-                self.pixel_inspector.set_image(self.original_image)
-            
-            self.status_bar.set_main_status("Reset to original image")
-            self.status_bar.set_processing_info()  # Clear processing info
-            self.reset_button.configure(state=tk.DISABLED)
+                messagebox.showerror("Open Error", f"Could not open image:\n{e}")
     
     def _save_image(self):
-        """Save the current image."""
-        current_image = self.processed_image if self.processed_image is not None else self.original_image
-        
-        if current_image is None:
-            messagebox.showerror("Error", "No image to save")
+        """Save the processed image."""
+        if self.processed_image is None:
+            messagebox.showwarning("Save Warning", "No processed image to save")
             return
         
+        # Suggest filename
+        default_name = f"enhanced_{self.current_colorspace}_scale{int(self.scale_var.get())}.jpg"
+        
         file_types = [
-            ('JPEG files', '*.jpg'),
-            ('PNG files', '*.png'),
-            ('TIFF files', '*.tiff'),
-            ('All files', '*.*')
+            ("JPEG files", "*.jpg"),
+            ("PNG files", "*.png"),
+            ("TIFF files", "*.tiff"),
+            ("All files", "*.*")
         ]
         
         filename = filedialog.asksaveasfilename(
-            title="Save Image",
+            title="Save Enhanced Image",
+            initialname=default_name,
             filetypes=file_types,
             defaultextension='.jpg'
         )
         
         if filename:
             try:
-                pil_image = Image.fromarray(current_image)
+                pil_image = Image.fromarray(self.processed_image)
                 pil_image.save(filename)
-                self.status_bar.set_main_status(f"Saved: {Path(filename).name}")
+                self._set_status(f"Saved: {Path(filename).name}")
             except Exception as e:
-                self.infrastructure.error_manager.handle_error(
-                    e, "Save Image", f"Could not save image:\n{e}"
+                messagebox.showerror("Save Error", f"Could not save image:\n{e}")
+    
+    def _reset_image(self):
+        """Reset to original image."""
+        if self.original_image is not None:
+            self.processed_image = self.original_image.copy()
+            self.preprocessed_image = None
+            self.last_result = None
+            self._display_image(self.processed_image)
+            self._update_ui_state()
+            self._set_status("Reset to original image")
+    
+    def _display_image(self, image):
+        """Display an image on the canvas."""
+        if image is None:
+            return
+        
+        # Calculate display size (fit to canvas)
+        canvas_width = self.canvas.winfo_width()
+        canvas_height = self.canvas.winfo_height()
+        
+        if canvas_width <= 1 or canvas_height <= 1:
+            # Canvas not ready, schedule for later
+            self.root.after(100, lambda: self._display_image(image))
+            return
+        
+        img_height, img_width = image.shape[:2]
+        
+        # Calculate scaling factor
+        scale_x = canvas_width / img_width
+        scale_y = canvas_height / img_height
+        scale = min(scale_x, scale_y, 1.0)  # Don't upscale
+        
+        # Resize image for display
+        new_width = int(img_width * scale)
+        new_height = int(img_height * scale)
+        
+        display_image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+        
+        # Convert to PIL and then to PhotoImage
+        pil_image = Image.fromarray(display_image)
+        self.photo_image = ImageTk.PhotoImage(pil_image)
+        
+        # Clear canvas and display image
+        self.canvas.delete("all")
+        self.canvas.create_image(
+            canvas_width // 2, canvas_height // 2,
+            image=self.photo_image, anchor=tk.CENTER
+        )
+    
+    # Processing operations
+    
+    def _process_image(self):
+        """Process image with current settings."""
+        if self.original_image is None:
+            messagebox.showwarning("Process Warning", "No image loaded")
+            return
+        
+        # Disable processing button during operation
+        self.process_button.configure(state=tk.DISABLED)
+        self._set_status("Processing...")
+        
+        # Start processing in separate thread
+        self.processing_thread = threading.Thread(target=self._process_image_thread)
+        self.processing_thread.daemon = True
+        self.processing_thread.start()
+    
+    def _process_image_thread(self):
+        """Process image in separate thread."""
+        try:
+            # Build preprocessing config
+            config = self._build_preprocessing_config()
+            
+            # Apply preprocessing if any steps are enabled
+            if any(step.get('enabled', False) for step in config.values()):
+                self.preprocessed_image, preprocessing_results = self.preprocessing_pipeline.process(
+                    self.original_image, config
                 )
+                
+                # Use preprocessed image for decorrelation
+                input_image = self.preprocessed_image
+                self._set_status_threadsafe("Preprocessing completed, applying decorrelation...")
+            else:
+                # No preprocessing, use original image
+                input_image = self.original_image
+                preprocessing_results = []
+                self.preprocessed_image = None
+            
+            # Apply decorrelation stretch
+            self.last_result = self.dstretch.process(
+                input_image, 
+                self.current_colorspace, 
+                self.scale_var.get()
+            )
+            
+            self.processed_image = self.last_result.processed_image
+            
+            # Update UI in main thread
+            self.root.after(0, self._processing_completed)
+            
+        except Exception as e:
+            logger.error(f"Processing error: {e}")
+            self.root.after(0, lambda: self._processing_failed(str(e)))
+    
+    def _build_preprocessing_config(self):
+        """Build preprocessing configuration from UI state."""
+        config = {}
+        
+        if self.auto_contrast_var.get():
+            config['auto_contrast'] = {
+                'enabled': True,
+                'saturated_pixels': self.contrast_clip_var.get(),
+                'normalize': True
+            }
+        
+        if self.color_balance_var.get():
+            config['color_balance'] = {
+                'enabled': True,
+                'method': self.balance_method_var.get(),
+                'strength': self.balance_strength_var.get(),
+                'preserve_luminance': True
+            }
+        
+        if self.flatten_var.get():
+            config['flatten'] = {
+                'enabled': True,
+                'method': self.flatten_method_var.get(),
+                'large_structures': int(self.flatten_large_var.get()),
+                'small_structures': int(self.flatten_small_var.get()),
+                'auto_scale': True
+            }
+        
+        if self.invert_var.get():
+            config['invert'] = {
+                'enabled': True
+            }
+        
+        return config
+    
+    def _quick_enhance(self):
+        """Apply quick enhancement based on current colorspace."""
+        if self.original_image is None:
+            messagebox.showwarning("Process Warning", "No image loaded")
+            return
+        
+        try:
+            self._set_status("Applying quick enhancement...")
+            
+            # Apply quick enhancement
+            enhanced_image = quick_enhance(self.original_image, 'balanced')
+            
+            # Apply decorrelation stretch
+            self.last_result = self.dstretch.process(
+                enhanced_image, 
+                self.current_colorspace, 
+                self.scale_var.get()
+            )
+            
+            self.processed_image = self.last_result.processed_image
+            self.preprocessed_image = enhanced_image
+            
+            # Update display
+            self._display_image(self.processed_image)
+            self._update_ui_state()
+            
+            self._set_status("Quick enhancement applied")
+            
+        except Exception as e:
+            messagebox.showerror("Enhancement Error", f"Quick enhancement failed:\n{e}")
+    
+    # Individual processor methods
+    
+    def _apply_invert_only(self):
+        """Apply invert processor only (no decorrelation)."""
+        self._apply_single_processor('invert', 'Invert')
+    
+    def _apply_auto_contrast_only(self):
+        """Apply auto contrast processor only (no decorrelation)."""
+        config = {
+            'saturated_pixels': self.contrast_clip_var.get(),
+            'normalize': True
+        }
+        self._apply_single_processor('auto_contrast', 'Auto Contrast', config)
+    
+    def _apply_color_balance_only(self):
+        """Apply color balance processor only (no decorrelation)."""
+        config = {
+            'method': self.balance_method_var.get(),
+            'strength': self.balance_strength_var.get(),
+            'preserve_luminance': True
+        }
+        self._apply_single_processor('color_balance', 'Color Balance', config)
+    
+    def _apply_flatten_only(self):
+        """Apply flatten processor only (no decorrelation)."""
+        config = {
+            'method': self.flatten_method_var.get(),
+            'large_structures': int(self.flatten_large_var.get()),
+            'small_structures': int(self.flatten_small_var.get()),
+            'suppress_stripes': True,
+            'auto_scale': True
+        }
+        self._apply_single_processor('flatten', 'Flatten', config)
+    
+    def _apply_hue_shift_only(self):
+        """Apply hue shift processor only (no decorrelation)."""
+        # Simple dialog for hue shift amount
+        from tkinter import simpledialog
+        
+        hue_shift = simpledialog.askfloat(
+            "Hue Shift",
+            "Enter hue shift in degrees (-180 to 180):",
+            initialvalue=0,
+            minvalue=-180,
+            maxvalue=180
+        )
+        
+        if hue_shift is not None:
+            config = {
+                'hue_shift': hue_shift,
+                'saturation_boost': 1.0,
+                'selective': False
+            }
+            self._apply_single_processor('hue_shift', 'Hue Shift', config)
+    
+    def _apply_single_processor(self, processor_name: str, display_name: str, config: dict = None):
+        """Apply a single processor independently."""
+        if self.original_image is None:
+            messagebox.showwarning("Process Warning", "No image loaded")
+            return
+        
+        try:
+            self._set_status(f"Applying {display_name}...")
+            
+            # Import processor factory
+            from .independent_processors import ProcessorFactory, ProcessorType
+            
+            # Get processor type
+            processor_type_map = {
+                'invert': ProcessorType.INVERT,
+                'auto_contrast': ProcessorType.AUTO_CONTRAST,
+                'color_balance': ProcessorType.COLOR_BALANCE,
+                'flatten': ProcessorType.FLATTEN,
+                'hue_shift': ProcessorType.HUE_SHIFT
+            }
+            
+            if processor_name not in processor_type_map:
+                raise ValueError(f"Unknown processor: {processor_name}")
+            
+            # Create processor and apply
+            processor_type = processor_type_map[processor_name]
+            processor = ProcessorFactory.create_processor(processor_type)
+            
+            # Apply processor with config
+            result = processor.process(self.original_image, **(config or {}))
+            
+            # Update display with processed image
+            self.processed_image = result.image
+            self.preprocessed_image = result.image  # Store as preprocessed
+            self.last_result = None  # No decorrelation applied
+            
+            # Update display
+            self._display_image(self.processed_image)
+            self._update_ui_state()
+            
+            # Show statistics if available
+            if result.statistics:
+                stats_info = f"{display_name} applied successfully\n\n"
+                if 'overall_improvement' in result.statistics:
+                    stats_info += f"Improvement: {result.statistics['overall_improvement']:.2f}\n"
+                messagebox.showinfo(f"{display_name} Results", stats_info)
+            
+            self._set_status(f"{display_name} applied (independent)")
+            
+        except Exception as e:
+            messagebox.showerror(f"{display_name} Error", f"{display_name} failed:\n{e}")
+    
+    def _processing_completed(self):
+        """Handle successful processing completion."""
+        # Update display
+        self._display_image(self.processed_image)
+        
+        # Update UI state
+        self._update_ui_state()
+        
+        # Re-enable processing button
+        self.process_button.configure(state=tk.NORMAL)
+        
+        # Update status
+        preprocessing_info = " (with preprocessing)" if self.preprocessed_image is not None else ""
+        self._set_status(f"Processing completed: {self.current_colorspace} scale {int(self.scale_var.get())}{preprocessing_info}")
+    
+    def _processing_failed(self, error_message):
+        """Handle processing failure."""
+        # Re-enable processing button
+        self.process_button.configure(state=tk.NORMAL)
+        
+        # Show error
+        messagebox.showerror("Processing Error", f"Processing failed:\n{error_message}")
+        
+        self._set_status("Processing failed")
+    
+    def _set_status_threadsafe(self, message):
+        """Set status message from thread."""
+        self.root.after(0, lambda: self._set_status(message))
+    
+    # Menu handlers
+    
+    def _show_pipeline_info(self):
+        """Show pipeline information dialog."""
+        info = get_pipeline_info()
+        info_text = "DStretch Pipeline Information:\n\n"
+        for key, value in info.items():
+            info_text += f"{key}: {value}\n"
+        
+        messagebox.showinfo("Pipeline Information", info_text)
+    
+    def _show_processors(self):
+        """Show available processors dialog."""
+        processors = get_available_processors()
+        processor_text = "Available Processors:\n\n"
+        for processor_type in processors:
+            processor_text += f"• {processor_type.value}\n"
+        
+        messagebox.showinfo("Available Processors", processor_text)
+    
+    def _reset_all_settings(self):
+        """Reset all settings to defaults."""
+        self.preset_var.set("custom")
+        self.invert_var.set(False)
+        self.auto_contrast_var.set(False)
+        self.color_balance_var.set(False)
+        self.flatten_var.set(False)
+        self.contrast_clip_var.set(0.1)
+        self.balance_method_var.set("gray_world")
+        self.balance_strength_var.set(1.0)
+        self.flatten_method_var.set("bandpass")
+        self.flatten_large_var.set(40.0)
+        self.flatten_small_var.set(3.0)
+        self.scale_var.set(15.0)
+        self._select_colorspace("YDS")
+        self._set_status("Settings reset to defaults")
     
     def _show_about(self):
         """Show about dialog."""
         messagebox.showinfo(
-            "About DStretch Python",
-            "DStretch Python v0.1.0\n\n"
+            "About DStretch Python v2.0",
+            "DStretch Python v2.0\n"
+            "Independent Pipeline Architecture\n\n"
             "Python implementation of the DStretch decorrelation stretch algorithm\n"
             "for enhancing archaeological rock art images.\n\n"
-            "Based on the original DStretch ImageJ plugin by Jon Harman."
+            "NEW in v2.0:\n"
+            "• Independent preprocessing pipeline\n"
+            "• Corrected tool application order\n"
+            "• Enhanced presets for common use cases\n"
+            "• Improved workflow matching ImageJ DStretch\n\n"
+            "Based on the original DStretch ImageJ plugin by Jon Harman.\n"
+            "Python implementation by Claude (DStretch Migration Project)."
         )
+    
+    # Utility methods
+    
+    def _set_status(self, message):
+        """Set status message."""
+        self.status_var.set(message)
     
     def _update_ui_state(self):
         """Update UI state based on current conditions."""
         has_image = self.original_image is not None
-        has_processed = self.processed_image is not None
+        has_result = self.last_result is not None
         
         # Enable/disable buttons
         self.process_button.configure(state=tk.NORMAL if has_image else tk.DISABLED)
-        self.reset_button.configure(state=tk.NORMAL if has_processed else tk.DISABLED)
+        self.reset_button.configure(state=tk.NORMAL if has_result else tk.DISABLED)
     
     def run(self):
         """Start the GUI application."""
@@ -605,8 +842,17 @@ class DStretchGUI:
 
 def main():
     """Main entry point for GUI application."""
-    app = DStretchGUI()
-    app.run()
+    try:
+        app = DStretchGUI()
+        app.run()
+    except Exception as e:
+        # Fallback error handling
+        import tkinter.messagebox as mb
+        mb.showerror(
+            "Startup Error",
+            f"Failed to start DStretch GUI:\n{e}\n\n"
+            f"Advanced GUI available: {ADVANCED_GUI_AVAILABLE}"
+        )
 
 
 if __name__ == '__main__':
