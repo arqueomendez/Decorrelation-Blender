@@ -1,4 +1,3 @@
----
 # DStretch Python
 
 **Inspirado y basado en el plugin DStretch original de Jon Harman (ImageJ).**
