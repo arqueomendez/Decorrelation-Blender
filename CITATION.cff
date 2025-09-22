@@ -1,0 +1,32 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: Decorrelation-Blender
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Victor
+    family-names: Mendez
+    email: victor.mendez@uc.cl
+    orcid: 'https://orcid.org/0000-0002-3453-3708'
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.17172812
+repository-code: 'https://github.com/arqueomendez/Decorrelation-Blender'
+abstract: >-
+  DStretch Python es una implementación avanzada y validada
+  del algoritmo decorrelation stretch para el realce de
+  imágenes arqueológicas, especialmente arte rupestre, en
+  Python. Replica matemáticamente el plugin DStretch de
+  ImageJ (Jon Harman), con arquitectura moderna, interfaces
+  CLI/GUI y 23 espacios de color validados.
+keywords:
+  - decorrelation stretch
+  - dstretch
+  - blender
+  - archaeology
+license: CC-BY-NC-4.0
+version: v0.0.1
