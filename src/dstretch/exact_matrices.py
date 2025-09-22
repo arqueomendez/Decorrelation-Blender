@@ -1,6 +1,11 @@
 """
 Datos de Matriz y Constantes para el Algoritmo DStretch - VERSIÓN DEFINITIVA.
 
+Inspirado y basado en el plugin DStretch original de Jon Harman (ImageJ).
+
+Autor principal: Víctor Méndez
+Asistido por: Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1
+
 Este módulo contiene todas las matrices de transformación, constantes numéricas
 y funciones para construir las Tablas de Búsqueda (LUTs) necesarias para replicar
 fielmente el plugin DStretch de ImageJ.

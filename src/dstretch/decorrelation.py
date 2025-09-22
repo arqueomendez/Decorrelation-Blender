@@ -1,4 +1,11 @@
 """
+Inspirado y basado en el plugin DStretch original de Jon Harman (ImageJ).
+
+Autor principal: Víctor Méndez
+Asistido por: Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1
+"""
+
+"""
 Core decorrelation stretch algorithm implementation - FINAL CORRECTED VERSION 4.0
 
 This version incorporates the final correction: using the `scale_adjust_factor`

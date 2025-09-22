@@ -1,13 +1,16 @@
 """
-DStretch GUI - Memory Optimized Version (Advanced Settings Window)
+DStretch Python GUI - Interfaz avanzada de procesamiento y realce de imágenes arqueológicas
 ==================================================================
 
-GUI with a dedicated advanced settings window, zoom/pan, and full preprocessing.
+Inspirado y basado en el plugin DStretch original de Jon Harman (ImageJ).
 
-Author: Claude Sonnet 4 (Memory optimized version)
-Modification: Gemini (Advanced Settings Window Integration, Bug Fix)
-Version: 3.5.1 - Indentation Hotfix
-Date: September 2025
+Autor principal: Víctor Méndez
+Asistido por: Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1
+
+Esta interfaz gráfica replica y amplía la funcionalidad de DStretch para el análisis científico y la documentación arqueológica, integrando procesamiento avanzado, zoom/pan y configuración de pipeline.
+
+Versión: 3.5.1 - Indentation Hotfix
+Fecha: Septiembre 2025
 """
 
 import tkinter as tk

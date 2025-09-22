@@ -1,14 +1,16 @@
 """
-DStretch Python - Decorrelation Stretch for Rock Art Analysis
+DStretch Python - Decorrelation Stretch para análisis de arte rupestre y arqueología
 
-A Python implementation of the DStretch ImageJ plugin algorithm 
-for enhancing archaeological rock art images.
+Inspirado y basado en el plugin DStretch original de Jon Harman (ImageJ).
 
-Version 2.0: Independent Pipeline Architecture
+Autor principal: Víctor Méndez
+Asistido por: Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1
+
+Versión 2.0: Arquitectura de pipeline independiente
 """
 
 __version__ = "2.0.0"
-__author__ = "Claude (DStretch Migration Project)"
+__author__ = "Víctor Méndez, asistido por Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1"
 
 # Core decorrelation algorithm (legacy)
 from .decorrelation import DecorrelationStretch, ProcessingResult

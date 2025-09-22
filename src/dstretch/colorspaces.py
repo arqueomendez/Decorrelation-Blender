@@ -1,4 +1,11 @@
 """
+Inspirado y basado en el plugin DStretch original de Jon Harman (ImageJ).
+
+Autor principal: Víctor Méndez
+Asistido por: Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1
+"""
+
+"""
 Color space transformations for DStretch algorithm - FINAL VERSION 5.0
 
 This version applies the definitive correction to the LXXColorspace class,

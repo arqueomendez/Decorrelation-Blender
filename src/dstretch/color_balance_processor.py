@@ -1,4 +1,11 @@
 """
+Inspirado y basado en el plugin DStretch original de Jon Harman (ImageJ).
+
+Autor principal: Víctor Méndez
+Asistido por: Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1
+"""
+
+"""
 Color Balance Processor for DStretch Python.
 
 Implements Gray World algorithm with percentile clipping for archaeological image enhancement.

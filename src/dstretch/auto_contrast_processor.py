@@ -1,3 +1,10 @@
+"""
+Inspirado y basado en el plugin DStretch original de Jon Harman (ImageJ).
+
+Autor principal: Víctor Méndez
+Asistido por: Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1
+"""
+
 #!/usr/bin/env python3
 """
 DStretch Python - Auto Contrast Processor

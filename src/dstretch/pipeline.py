@@ -1,4 +1,11 @@
 """
+Inspirado y basado en el plugin DStretch original de Jon Harman (ImageJ).
+
+Autor principal: Víctor Méndez
+Asistido por: Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1
+"""
+
+"""
 DStretch Pipeline - Refactored Architecture for Independent Processing
 
 This module implements the corrected pipeline architecture where independent
