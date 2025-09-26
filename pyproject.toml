@@ -17,6 +17,7 @@ dependencies = [
     "pillow>=8.3.0",
     "matplotlib>=3.7.5",
     "scikit-image>=0.21.0",
+    "nuitka>=2.7.16",
 ]
 
 [project.optional-dependencies]

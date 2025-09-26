@@ -6,10 +6,10 @@ Inspirado y basado en el plugin DStretch original de Jon Harman (ImageJ).
 Autor principal: Víctor Méndez
 Asistido por: Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1
 
-Versión 2.0: Arquitectura de pipeline independiente
+Versión 0.0.2: Arquitectura de pipeline independiente
 """
 
-__version__ = "2.0.0"
+__version__ = "0.0.2"
 __author__ = "Víctor Méndez, asistido por Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1"
 
 # Core decorrelation algorithm (legacy)

@@ -16,27 +16,10 @@ Java implementation. This resolves the final validation discrepancies.
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import Dict, List
-
-# --- CONSTANTES Y LUTS (sin cambios) ---
-D65_ILLUMINANT = np.array([95.047, 100.0, 108.883], dtype=np.float64)
-RGB_TO_XYZ_MATRIX = np.array([[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]], dtype=np.float64)
-XYZ_TO_RGB_MATRIX = np.array([[3.2406, -1.5372, -0.4986], [-0.9689, 1.8758, 0.0415], [0.0557, -0.2040, 1.0570]], dtype=np.float64)
-YCBCR_MATRIX = np.array([[0.25679, 0.50413, 0.09790], [-0.148223, -0.291, 0.43922], [0.43922, -0.367789, -0.071427]], dtype=np.float64)
-
-BUILTIN_MATRICES = {
-    'CRGB': np.array([[0.37, 0.34, 0.30], [-3.80, 7.70, -4.00], [-1.80, 0.22, 2.00]], dtype=np.float64),
-    'RGB0': np.array([[0.38, 0.32, 0.33], [-2.30, 3.20, -0.42], [-0.47, -0.76, 2.43]], dtype=np.float64),
-    'LABI': np.array([[0.21, 4.64, -0.64], [-0.85, 0.05, 0.09], [0.34, 0.42, 3.13]], dtype=np.float64),
-}
-
-def build_srgb_to_linear_lut() -> np.ndarray:
-    srgb_normalized = np.arange(256) / 255.0
-    linear = np.where(srgb_normalized <= 0.04045, srgb_normalized / 12.92, ((srgb_normalized + 0.055) / 1.055) ** 2.4)
-    return linear * 100.0
-
-def build_xyz_to_lab_function_lut() -> np.ndarray:
-    t = np.linspace(0, 1, 1001)
-    return np.where(t > 0.008856, t**(1.0/3.0), 7.787 * t + (16.0 / 116.0))
+from .exact_matrices import (
+    D65_ILLUMINANT, RGB_TO_XYZ_MATRIX, XYZ_TO_RGB_MATRIX,
+    build_srgb_to_linear_lut, build_xyz_to_lab_function_lut
+)
 
 # --- CLASES BASE (sin cambios) ---
 class AbstractColorspace(ABC):
@@ -236,6 +219,10 @@ class CRGBColorspace(BuiltinMatrixColorspace):
     base_colorspace_name = "RGB"
     @property
     def matrix(self): return BUILTIN_MATRICES['CRGB']
+
+# Nota: BUILTIN_MATRICES ahora debe ser importado si se usa aquí.
+# O, mejor aún, que las clases que lo usan lo importen directamente.
+from .exact_matrices import BUILTIN_MATRICES
 
 class RGB0Colorspace(BuiltinMatrixColorspace):
     name = "RGB0"

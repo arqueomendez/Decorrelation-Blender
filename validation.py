@@ -60,14 +60,9 @@ class SmartValidator:
         # Llama a la nueva función de setup
         self.logger = self._setup_logging()
         
-        self.colorspace_mapping = {
-            'yds': 'YDS', 'crgb': 'CRGB', 'lre': 'LRE', 'lds': 'LDS',
-            'lab': 'LAB', 'rgb': 'RGB', 'ybr': 'YBR', 'ybk': 'YBK',
-            'yre': 'YRE', 'yrd': 'YRD', 'yye': 'YYE', 'ywe': 'YWE',
-            'yxx': 'YXX', 'lrd': 'LRD', 'lbk': 'LBK', 'lbl': 'LBL',
-            'lwe': 'LWE', 'lye': 'LYE', 'lxx': 'LXX', 'rgb0': 'RGB0',
-            'labi': 'LABI'
-        }
+        # Genera el mapeo de colores dinámicamente para evitar desincronización.
+        # Crea un diccionario de {nombre_en_minusculas: nombre_oficial}
+        self.colorspace_mapping = {name.lower(): name for name in COLORSPACES.keys()}
         
         self.logger.info(f"Validator initialized. All results will be saved to: {self.results_dir}")
         self.logger.info(f"Initialized with {len(self.colorspace_mapping)} colorspace mappings")

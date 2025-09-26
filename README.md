@@ -1,26 +1,22 @@
 # DStretch Python
 
-**Inspirado y basado en el plugin DStretch original de Jon Harman (ImageJ).**
-
-**Autor principal:** Víctor Méndez
-**Asistido por:** Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1
-
+[![DOI](https://zenodo.org/badge/1047210737.svg)](https://doi.org/10.5281/zenodo.17172811)
 
 **DStretch Python** es una implementación avanzada y validada del algoritmo decorrelation stretch para el realce de imágenes arqueológicas, especialmente arte rupestre, en Python. Replica matemáticamente el plugin DStretch de ImageJ (Jon Harman), con arquitectura moderna, interfaces CLI/GUI y 23 espacios de color validados.
 
-## Descripción General
+## Motivación
 
 DStretch Python permite revelar pigmentos y detalles invisibles en fotografías de arte rupestre y otros contextos arqueológicos. Utiliza análisis estadístico de color (PCA decorrelation stretch) y matrices predefinidas para separar y realzar colores de interés, facilitando la documentación, análisis y preservación digital.
 
-## Características Principales
+## Características
 
 - **Replicación exacta** del algoritmo DStretch ImageJ (validación >99.97% SSIM)
 - **23 espacios de color** (YDS, CRGB, LRE, LAB, RGB, etc.)
-- **CLI y GUI multiplataforma** (Windows, macOS, Linux)
-- **Procesamiento batch y scripting Python**
-- **Optimización para imágenes grandes** (procesamiento por chunks, uso eficiente de memoria)
-- **Extensible y modular** (fácil integración en pipelines científicos)
-- **Documentación técnica y científica completa**
+- **Interfaces CLI y GUI** multiplataforma (Windows, macOS, Linux)
+- **API de Python** para scripting y procesamiento por lotes.
+- **Optimización para imágenes grandes** con uso eficiente de memoria.
+- **Arquitectura extensible** para fácil integración en pipelines científicos.
+- **Documentación completa** técnica y de uso.
 
 ## Formatos de Imagen Soportados
 
@@ -32,19 +28,53 @@ DStretch Python permite revelar pigmentos y detalles invisibles en fotografías 
 
 ## Instalación
 
+Instalar ambiente [uv](https://docs.astral.sh/uv/getting-started/installation/) según sistema operativo: 
+
+- Windows:
+```bash
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+- macOS y linux
+```bash
+wget -qO- https://astral.sh/uv/install.sh | sh
+```
+
+Descargar repositorio:
+
 ```bash
 git clone https://github.com/arqueomendez/dstretch-python.git
+```
+
+Instalar Decorrelation Stretch:
+Con UV:
+```bash
 cd dstretch-python
 uv sync
 ```
-o usando pip:
+
+O usando pip:
 ```bash
-pip install dstretch-python
+uv pip install -r requirements
 ```
+
+## Tutorial en Video 📹
+
+Para una explicación completa y visual del proyecto DStretch Python, incluyendo instalación, uso y ejemplos prácticos, consulta este video tutorial en español:
+
+[![DStretch Python - Tutorial Completo](https://img.youtube.com/vi/0bSW_uju6TI/0.jpg)](https://www.youtube.com/watch?v=0bSW_uju6TI)
+
+**🎥 [Ver tutorial en YouTube: DStretch Python - Explicación completa en español](https://www.youtube.com/watch?v=0bSW_uju6TI)**
 
 ## Uso Rápido
 
+El proyecto se puede utilizar de dos maneras: a través de una Interfaz de Línea de Comandos (CLI) para scripting y procesamiento por lotes, o mediante una Interfaz Gráfica de Usuario (GUI) para análisis visual e interactivo.
+
+Para asegurar que los comandos se ejecuten correctamente dentro del entorno virtual gestionado por `uv`, se recomienda usar `uv run`. Esto evita conflictos con otras instalaciones de Python o paquetes en el sistema.
+
 ### CLI
+La CLI es ideal para procesar imágenes de forma automática o integrar DStretch en flujos de trabajo existentes.
+
 ```bash
 # Procesamiento básico (espacio YDS por defecto)
 dstretch input.jpg
@@ -52,8 +82,15 @@ dstretch input.jpg
 dstretch input.jpg --colorspace CRGB --scale 25
 # Guardar en archivo específico
 dstretch input.jpg --colorspace LRE --scale 30 --output enhanced.jpg
+# Procesamiento básico
+uv run dstretch input.jpg
+
+# Especificar espacio de color, intensidad y archivo de salida
+uv run dstretch input.jpg --colorspace CRGB --scale 25 --output enhanced.jpg
+
 # Listar espacios disponibles
 dstretch --list-colorspaces
+uv run dstretch --list-colorspaces
 ```
 
 ### GUI
@@ -146,16 +183,21 @@ Este proyecto está licenciado bajo **Creative Commons Attribution-NonCommercial
 
 Ver el archivo LICENSE para detalles completos.
 
-## Cita Recomendada
+## Cita y Autores
 
-Si usas DStretch Python en trabajos académicos, por favor cita:
+Si utilizas DStretch Python en trabajos académicos, por favor cita el software utilizando su DOI de Zenodo, que garantiza una referencia permanente y rastreable.
 
-> DStretch Python: Implementación en Python de decorrelation stretch para realce de imágenes arqueológicas. Basado en el plugin DStretch de Jon Harman.
+Formato de cita sugerido (APA 7 para software):
 
-## Reconocimientos
+> Méndez, V. (2025). *DStretch Python* (Version 0.0.2) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.17172811
 
-- Jon Harman: Creador del plugin DStretch original para ImageJ
-- Comunidad ImageJ y arqueológica: por pruebas y retroalimentación
+### Autores y Agradecimientos
+
+- **Autor principal:** Víctor Méndez
+- **Asistido por:** Claude Sonnet 4, Gemini 2.5 Pro, Copilot con GPT-4.1
+- **Agradecimientos:** A Jon Harman por crear el plugin DStretch original para ImageJ y a la comunidad arqueológica por su retroalimentación.
+
+> Harmand, J. (2008). Using Decorrelation Stretch to Enhance Rock Art Images. American Rock Art Research Association Annual Meeting. American Rock Art Research Association Annual Meeting. 15-12-2024. https://www.dstretch.com/AlgorithmDescription.html
 
 ## Soporte y Comunidad
 
